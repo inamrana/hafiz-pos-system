@@ -19,6 +19,10 @@
 
 # production
 /build
+/dist
+
+# shop data — per-tenant SQLite databases, never commit real shop data
+/data/
 
 # misc
 .DS_Store

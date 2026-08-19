@@ -1,0 +1,33 @@
+<svg width="340" height="110" viewBox="0 0 340 110" xmlns="http://www.w3.org/2000/svg" font-family="Georgia, 'Times New Roman', serif">
+  <!-- Background -->
+  <rect width="340" height="110" fill="white" rx="6"/>
+
+  <!-- Book shape: left page -->
+  <path d="M18 18 C18 18, 10 20, 10 55 C10 55, 18 53, 52 52 L52 18 Z" fill="#1e293b"/>
+  <!-- Book shape: right page -->
+  <path d="M52 18 L52 52 C86 53, 94 55, 94 55 C94 20, 86 18, 86 18 Z" fill="#d4a017"/>
+  <!-- Book spine/center line -->
+  <rect x="50" y="18" width="4" height="34" fill="#0f172a" rx="1"/>
+  <!-- Pages curl highlight -->
+  <ellipse cx="52" cy="52" rx="7" ry="3" fill="#94a3b8" opacity="0.5"/>
+
+  <!-- Pen across the book, diagonal -->
+  <rect x="38" y="9" width="4" height="46" rx="2" fill="#d4a017" transform="rotate(-15 40 32)"/>
+  <polygon points="37,49 43,49 40,57" fill="#c8950f" transform="rotate(-15 40 32)"/>
+
+  <!-- Vertical gold divider line -->
+  <line x1="108" y1="12" x2="108" y2="98" stroke="#d4a017" stroke-width="2"/>
+
+  <!-- Text block -->
+  <!-- Main name line 1 -->
+  <text x="122" y="40" font-size="19" font-weight="bold" fill="#1e293b" letter-spacing="0.3">Hafiz Books</text>
+  <!-- Ampersand + Stationers in gold -->
+  <text x="122" y="62" font-size="19" font-weight="bold" fill="#d4a017" letter-spacing="0.3">&amp; Stationers</text>
+  <!-- Address -->
+  <text x="122" y="81" font-size="10.5" fill="#64748b" font-family="Arial, sans-serif" letter-spacing="0.2">Mumtaz City, Islamabad</text>
+
+  <!-- Bottom gold rule -->
+  <line x1="10" y1="96" x2="330" y2="96" stroke="#d4a017" stroke-width="1.5"/>
+  <!-- Tagline -->
+  <text x="10" y="107" font-size="8" fill="#94a3b8" font-family="Arial, sans-serif" letter-spacing="1">YOUR TRUSTED STATIONERY PARTNER</text>
+</svg>

@@ -1,0 +1,17 @@
+services:
+  mart-pos:
+    build: .
+    image: mart-pos:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /app/data
+    volumes:
+      # Named volume so every shop's SQLite database survives container
+      # rebuilds/redeploys. Back this up regularly (see DEPLOY.md).
+      - pos-data:/app/data
+
+volumes:
+  pos-data:
