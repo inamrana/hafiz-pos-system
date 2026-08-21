@@ -19,12 +19,12 @@ export async function withAuth(
   req: NextRequest,
   fn: (ctx: AuthedContext) => Promise<NextResponse> | NextResponse
 ): Promise<NextResponse> {
-  const session = getSession(req);
+  const session = await getSession(req);
   if (!session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   return withTenant(session.shopId, async () => {
-    const user = usersRepo.getById(session.userId);
+    const user = await usersRepo.getById(session.userId);
     if (!user || !user.active) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

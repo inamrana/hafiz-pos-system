@@ -3,5 +3,5 @@ import { reportsRepo } from '@/lib/repo';
 import { withAuth } from '@/lib/api-auth';
 
 export async function GET(req: NextRequest) {
-  return withAuth(req, () => NextResponse.json(reportsRepo.inventory()));
+  return withAuth(req, async () => NextResponse.json(await reportsRepo.inventory()));
 }

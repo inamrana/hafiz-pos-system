@@ -3,14 +3,14 @@ import { suppliersRepo } from '@/lib/repo';
 import { withAuth } from '@/lib/api-auth';
 
 export async function GET(req: NextRequest) {
-  return withAuth(req, () => {
+  return withAuth(req, async () => {
     const q = req.nextUrl.searchParams.get('q') || '';
     const id = req.nextUrl.searchParams.get('id');
     if (id) {
-      const supplier = suppliersRepo.getById(Number(id));
-      return NextResponse.json(supplier ? { ...supplier, ledger: suppliersRepo.ledger(supplier.id) } : null);
+      const supplier = await suppliersRepo.getById(Number(id));
+      return NextResponse.json(supplier ? { ...supplier, ledger: await suppliersRepo.ledger(supplier.id) } : null);
     }
-    return NextResponse.json(suppliersRepo.search(q));
+    return NextResponse.json(await suppliersRepo.search(q));
   });
 }
 
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
   return withAuth(req, async () => {
     const body = await req.json();
     if (!body.name) return NextResponse.json({ error: 'Name is required' }, { status: 400 });
-    const supplier = suppliersRepo.create(body);
+    const supplier = await suppliersRepo.create(body);
     return NextResponse.json(supplier, { status: 201 });
   });
 }
@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   return withAuth(req, async () => {
     const { supplierId, amount, notes } = await req.json();
-    const supplier = suppliersRepo.logPayment(Number(supplierId), Number(amount), notes);
+    const supplier = await suppliersRepo.logPayment(Number(supplierId), Number(amount), notes);
     return NextResponse.json(supplier);
   });
 }

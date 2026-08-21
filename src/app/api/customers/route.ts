@@ -3,9 +3,9 @@ import { customersRepo } from '@/lib/repo';
 import { withAuth } from '@/lib/api-auth';
 
 export async function GET(req: NextRequest) {
-  return withAuth(req, () => {
+  return withAuth(req, async () => {
     const q = req.nextUrl.searchParams.get('q') || '';
-    return NextResponse.json(customersRepo.search(q));
+    return NextResponse.json(await customersRepo.search(q));
   });
 }
 
@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
   return withAuth(req, async () => {
     const body = await req.json();
     if (!body.name) return NextResponse.json({ error: 'Name is required' }, { status: 400 });
-    const customer = customersRepo.create(body);
+    const customer = await customersRepo.create(body);
     return NextResponse.json(customer, { status: 201 });
   });
 }
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   return withAuth(req, async () => {
     const { customerId, amount, notes } = await req.json();
-    const customer = customersRepo.logPayment(Number(customerId), Number(amount), notes);
+    const customer = await customersRepo.logPayment(Number(customerId), Number(amount), notes);
     return NextResponse.json(customer);
   });
 }

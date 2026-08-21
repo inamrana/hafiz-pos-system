@@ -9,10 +9,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await getSessionFromCookies();
   if (!session) redirect('/login');
 
-  const data = await withTenant(session.shopId, () => {
-    const user = usersRepo.getById(session.userId);
+  const data = await withTenant(session.shopId, async () => {
+    const user = await usersRepo.getById(session.userId);
     if (!user || !user.active) return null;
-    return { user, settings: settingsRepo.getAll() };
+    return { user, settings: await settingsRepo.getAll() };
   });
 
   if (!data) redirect('/login');

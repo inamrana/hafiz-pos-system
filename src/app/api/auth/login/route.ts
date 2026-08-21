@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Shop code, username and password are required' }, { status: 400 });
   }
 
-  const shop = shopsRepo.getByCode(String(shopCode));
+  const shop = await shopsRepo.getByCode(String(shopCode));
   if (!shop) {
     return NextResponse.json({ error: 'Shop code not found' }, { status: 401 });
   }
@@ -21,6 +21,6 @@ export async function POST(req: NextRequest) {
   }
 
   const res = NextResponse.json({ user, shopName: shop.name });
-  setSessionCookie(res, shop.id, user.id);
+  await setSessionCookie(res, shop.id, user.id);
   return res;
 }

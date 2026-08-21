@@ -14,8 +14,9 @@ export const SESSION_COOKIE_OPTIONS = {
   maxAge: 60 * 60 * 24 * 30,
 };
 
-export function setSessionCookie(res: NextResponse, shopId: number, userId: number) {
-  res.cookies.set(SESSION_COOKIE, createSessionToken(shopId, userId), SESSION_COOKIE_OPTIONS);
+export async function setSessionCookie(res: NextResponse, shopId: number, userId: number) {
+  const token = await createSessionToken(shopId, userId);
+  res.cookies.set(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS);
 }
 
 export interface Session {
@@ -23,21 +24,22 @@ export interface Session {
   userId: number;
 }
 
-function sign(payload: string): string {
-  return crypto.createHmac('sha256', getPlatformSecret()).update(payload).digest('hex');
+async function sign(payload: string): Promise<string> {
+  const secret = await getPlatformSecret();
+  return crypto.createHmac('sha256', secret).update(payload).digest('hex');
 }
 
-export function createSessionToken(shopId: number, userId: number): string {
+export async function createSessionToken(shopId: number, userId: number): Promise<string> {
   const payload = JSON.stringify({ shopId, userId, ts: Date.now() });
   const encoded = Buffer.from(payload).toString('base64url');
-  const sig = sign(encoded);
+  const sig = await sign(encoded);
   return `${encoded}.${sig}`;
 }
 
-function verifySessionToken(token: string): Session | null {
+async function verifySessionToken(token: string): Promise<Session | null> {
   const [encoded, sig] = token.split('.');
   if (!encoded || !sig) return null;
-  const expected = sign(encoded);
+  const expected = await sign(encoded);
   const sigBuf = Buffer.from(sig);
   const expectedBuf = Buffer.from(expected);
   if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
@@ -50,8 +52,7 @@ function verifySessionToken(token: string): Session | null {
   }
 }
 
-/** Pure — verifies the session cookie without touching any shop database. */
-export function getSession(req: NextRequest): Session | null {
+export async function getSession(req: NextRequest): Promise<Session | null> {
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   return token ? verifySessionToken(token) : null;
 }

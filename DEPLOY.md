@@ -1,54 +1,86 @@
 # Deploying Mart POS
 
-Mart POS is a **multi-tenant hosted web app**: every shop that signs up gets its own
-SQLite database file under `DATA_DIR`. That means it needs a server with a real,
-persistent disk — **it will not work on Vercel or other serverless platforms**,
-since their filesystems are ephemeral (wiped between requests/deploys) and per-shop
-data would vanish or corrupt under concurrent invocations.
+Mart POS is a **multi-tenant hosted web app**: every shop that signs up shares one
+database, with every table scoped by `shop_id`. Data access goes through
+[`@libsql/client`](https://github.com/tursodatabase/libsql-client-ts), which works
+two ways:
 
-You need one of:
-- A VPS (DigitalOcean, Linode, Hetzner, AWS EC2, etc.), or
-- A Docker-friendly host with persistent volumes (Railway, Render, Fly.io, a VPS with Docker)
+- **Local file** (`file:...`) — zero setup, used automatically in dev and for
+  self-hosted/offline deployments (VPS, Docker, Electron).
+- **Turso** (remote libSQL over HTTP) — a hosted, SQLite-compatible database with a
+  free tier. This is what makes **Vercel** (and other serverless platforms) work,
+  since there's no local disk involved at all.
+
+Pick whichever fits how you want to run this.
 
 ---
 
-## Option A — Docker (recommended)
+## Option A — Vercel + Turso (free, no server to manage)
+
+### 1. Create a free Turso database
+
+1. Sign up at [turso.tech](https://turso.tech) (no card required).
+2. Install the CLI or use their web dashboard to create a database:
+   ```bash
+   turso db create mart-pos
+   ```
+3. Get the connection URL and an auth token:
+   ```bash
+   turso db show mart-pos --url
+   turso db tokens create mart-pos
+   ```
+
+### 2. Deploy to Vercel
+
+1. Import the GitHub repo into Vercel as a new project (framework preset: Next.js,
+   auto-detected).
+2. Add environment variables (**Project Settings → Environment Variables**):
+
+   | Variable | Value |
+   |---|---|
+   | `TURSO_DATABASE_URL` | the URL from `turso db show` (starts with `libsql://`) |
+   | `TURSO_AUTH_TOKEN` | the token from `turso db tokens create` |
+   | `NODE_ENV` | `production` (Vercel usually sets this automatically) |
+
+3. Deploy. The schema creates itself automatically on first request — no separate
+   migration step.
+4. Visit `https://<your-vercel-domain>/signup` to create the first shop.
+
+That's it — no volumes, no Dockerfile, no server to patch. Turso's free tier has
+real limits (storage, row reads/writes per month); check their current pricing
+page before committing a lot of shops to it.
+
+---
+
+## Option B — Docker (self-hosted, works with or without Turso)
 
 ```bash
-# Build and start
+# Build and start (uses the local-file database by default)
 docker compose up -d --build
 
-# Check it's running
 curl -I http://localhost:3000/login
-
-# View logs
 docker compose logs -f
-
-# Update after pulling new code
-docker compose up -d --build
 ```
 
-Shop data lives in the `pos-data` named volume (mounted at `/app/data` in the
-container) and survives rebuilds. To inspect or back it up:
+Shop data lives in the `pos-data` named volume (`/app/data` in the container). To
+use Turso instead of the local file even when self-hosting, just set
+`TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` in `docker-compose.yml`'s `environment:`
+block — the app picks whichever is configured automatically.
+
+To back up the local-file volume:
 
 ```bash
 docker run --rm -v hafiz-pos_pos-data:/data -v "$PWD/backup:/backup" \
   alpine tar czf /backup/pos-data-$(date +%F).tar.gz -C /data .
 ```
 
-Put Docker behind a reverse proxy (Caddy or nginx) for HTTPS — see below.
-
-> I built and smoke-tested the production build this Dockerfile runs (`next build` →
-> standalone output → `node server.js`, with signup/login/dashboard all verified
-> working end-to-end), but Docker itself isn't installed on this machine, so the
-> image build hasn't been run here. Do a `docker compose up -d --build` and confirm
-> before relying on it.
+Put Docker behind a reverse proxy (Caddy or nginx) for HTTPS.
 
 ---
 
-## Option B — Plain VPS (no Docker)
+## Option C — Plain VPS (no Docker)
 
-Requires Node.js 20+ on the server.
+Requires Node.js 20+.
 
 ```bash
 git clone <your-repo-url> mart-pos
@@ -56,7 +88,11 @@ cd mart-pos
 npm ci
 npm run build
 
+# Local file (default) — set DATA_DIR to a persistent disk
 DATA_DIR=/var/lib/mart-pos/data NODE_ENV=production PORT=3000 node .next/standalone/server.js
+
+# Or against Turso instead — TURSO_DATABASE_URL takes priority over DATA_DIR
+TURSO_DATABASE_URL=libsql://... TURSO_AUTH_TOKEN=... NODE_ENV=production PORT=3000 node .next/standalone/server.js
 ```
 
 `output: 'standalone'` doesn't auto-copy static assets, so before running you must:
@@ -105,20 +141,20 @@ your-domain.com {
 }
 ```
 
-Or nginx + certbot if you already run nginx.
-
 ---
 
 ## Environment variables
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `DATA_DIR` | Recommended | `./data` | Where `platform.db` and per-shop databases live. Point this at a persistent, non-network-mounted disk (SQLite's WAL mode doesn't play well with NFS). |
+| `TURSO_DATABASE_URL` | Only for Turso | — | If set, the app uses Turso instead of a local file. Takes priority over `DATA_DIR`. |
+| `TURSO_AUTH_TOKEN` | Only for Turso | — | Required alongside `TURSO_DATABASE_URL`. |
+| `DATA_DIR` | Only for local-file mode | `./data` | Where the local database file lives. Ignored if `TURSO_DATABASE_URL` is set. Point at a persistent, non-network-mounted disk. |
 | `PORT` | No | `3000` | Port the Node server listens on. |
-| `NODE_ENV` | Recommended | — | Set to `production` — this also makes the session cookie require HTTPS. |
+| `NODE_ENV` | Recommended | — | Set to `production` — also makes the session cookie require HTTPS. |
 
 No other secrets are required. The session-signing key is generated automatically
-on first run and stored in `platform.db`.
+on first run and stored in the database itself (`platform_settings` table).
 
 ---
 
@@ -132,18 +168,18 @@ password) for every login, including yours.
 
 ## Backups
 
-Everything that matters is under `DATA_DIR`: `platform.db` (the shop registry) and
-`shops/*.db` (one file per shop). Back this whole directory up on a schedule —
-a nightly cron job is enough for most shops:
+- **Turso**: use `turso db shell mart-pos .dump` or Turso's built-in point-in-time
+  recovery (check their current docs for retention on the free tier).
+- **Local file / Docker / VPS**: back up the whole `DATA_DIR` on a schedule:
+  ```bash
+  tar czf /backups/mart-pos-$(date +%F).tar.gz -C /var/lib/mart-pos/data .
+  ```
 
-```bash
-tar czf /backups/mart-pos-$(date +%F).tar.gz -C /var/lib/mart-pos/data .
-```
+## Multi-tenancy & scaling notes
 
-## Scaling notes
-
-This is a single-node SQLite setup — great for a handful to a few dozen shops on
-one box, but it doesn't horizontally scale across multiple app servers (each
-server would need its own copy of `DATA_DIR`, and they'd drift). If you outgrow
-that, the natural next step is migrating to a shared Postgres/MySQL instance —
-worth a dedicated pass if/when you get there rather than guessing at it now.
+Every shop shares one database; isolation is enforced by a `shop_id` column on
+every tenant-scoped table, checked in every single query. This is the standard
+SaaS pattern and scales to many shops on Turso's free/paid tiers without any
+per-shop provisioning. If you outgrow Turso specifically, the same `shop_id`
+pattern maps cleanly onto Postgres/MySQL — swapping the driver is a much smaller
+job than the original single-tenant → multi-tenant migration was.

@@ -9,14 +9,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Select at least one item to return' }, { status: 400 });
     }
     try {
-      const returnId = returnsRepo.create({
+      const returnId = await returnsRepo.create({
         billId: Number(body.billId),
         lines: body.lines,
         refundMethod: body.refundMethod === 'UDHAAR_ADJUST' ? 'UDHAAR_ADJUST' : 'CASH',
         notes: body.notes || '',
         cashierId: user.id,
       });
-      const bill = billsRepo.getById(Number(body.billId));
+      const bill = await billsRepo.getById(Number(body.billId));
       return NextResponse.json({ returnId, bill }, { status: 201 });
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Failed to process return';
