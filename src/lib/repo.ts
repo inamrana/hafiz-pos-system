@@ -40,13 +40,13 @@ export const itemsRepo = {
   async search(q: string): Promise<Item[]> {
     const db = await currentDb();
     if (!q.trim()) {
-      return db.prepare<Item>('SELECT * FROM items ORDER BY name ASC LIMIT 200').all();
+      return db.prepare<Item>('SELECT * FROM items ORDER BY name ASC').all();
     }
     const like = `%${q}%`;
     return db
       .prepare<Item>(
         `SELECT * FROM items WHERE (name LIKE ? OR category LIKE ? OR barcode = ? OR CAST(id AS TEXT) = ?)
-         ORDER BY name ASC LIMIT 50`
+         ORDER BY name ASC LIMIT 500`
       )
       .all(like, like, q, q);
   },

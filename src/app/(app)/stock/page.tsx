@@ -127,13 +127,23 @@ function StockPageClient() {
         return undefined;
       };
 
+      // Existing items, so re-importing a file (or a sheet with repeated barcodes/names)
+      // updates the matching item instead of failing on the barcode UNIQUE constraint.
+      const existingByBarcode = new Map(items.filter((i) => i.barcode).map((i) => [i.barcode!.toLowerCase(), i]));
+      const existingByName = new Map(items.map((i) => [i.name.trim().toLowerCase(), i]));
+
       let created = 0;
-      let failed = 0;
+      let updated = 0;
+      let skipped = 0;
+      const errorCounts = new Map<string, number>();
+
       for (const row of rows) {
         const name = String(field(row, ['Name']) || '').trim();
-        if (!name) { failed++; continue; }
+        if (!name) { skipped++; continue; }
+        const barcodeRaw = field(row, ['Barcode']);
+        const barcode = barcodeRaw ? String(barcodeRaw).trim() : null;
         const payload = {
-          barcode: field(row, ['Barcode']) || null,
+          barcode,
           name,
           category: String(field(row, ['Category']) || 'General'),
           cost_price: Number(field(row, ['CostPrice', 'Cost Price', 'BuyPrice', 'Buy Price', 'Cost']) ?? 0),
@@ -143,10 +153,32 @@ function StockPageClient() {
           unit_type: field(row, ['UnitType', 'Unit Type']) === 'WEIGHT' ? 'WEIGHT' : 'COUNT',
           low_stock_threshold: Number(field(row, ['LowStockThreshold', 'Low Stock Threshold', 'Low Stock Alert']) ?? 5),
         };
-        const res = await fetch('/api/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (res.ok) created++; else failed++;
+
+        const existing = (barcode && existingByBarcode.get(barcode.toLowerCase())) || existingByName.get(name.toLowerCase());
+        const res = existing
+          ? await fetch('/api/items', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: existing.id, ...payload }) })
+          : await fetch('/api/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+
+        if (res.ok) {
+          const saved: Item = await res.json();
+          if (saved.barcode) existingByBarcode.set(saved.barcode.toLowerCase(), saved);
+          existingByName.set(saved.name.toLowerCase(), saved);
+          if (existing) updated++; else created++;
+        } else {
+          const body = await res.json().catch(() => ({}));
+          const message = body.error || `HTTP ${res.status}`;
+          errorCounts.set(message, (errorCounts.get(message) || 0) + 1);
+          skipped++;
+        }
       }
-      setImportSummary(`Imported ${created} item(s)${failed ? `, ${failed} failed` : ''}.`);
+
+      const parts = [`${created} added`, `${updated} updated`];
+      if (skipped) parts.push(`${skipped} skipped`);
+      setImportSummary(`Imported ${rows.length} row(s): ${parts.join(', ')}.`);
+      if (errorCounts.size) {
+        const reasons = Array.from(errorCounts.entries()).map(([msg, n]) => `${msg} (×${n})`).join('; ');
+        setImportError(`Some rows were skipped — ${reasons}`);
+      }
       load(search);
     } catch {
       setImportError('Could not read the Excel file. Expected columns include Name, Category, Cost/Buy Price, Sale/Sell Price, Quantity/Stock, Unit, Barcode.');
