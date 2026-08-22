@@ -1,0 +1,11 @@
+node_modules
+.next
+data
+dist
+.git
+.gitignore
+*.md
+electron-main.js
+.env*
+npm-debug.log*
+.DS_Store
