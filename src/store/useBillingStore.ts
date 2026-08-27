@@ -7,6 +7,8 @@ export interface CartItem {
   quantity: number;
   price: number;
   total: number;
+  /** Only meaningful for custom items (itemId === null) — catalog items get their cost from the item record. */
+  cost: number;
 }
 
 export interface HeldBill {
@@ -27,11 +29,12 @@ interface BillingStore {
   selectedCustomer: { id: number; name: string; phone: string } | null;
   heldBills: HeldBill[];
   cashTendered: number;
-  addItem: (item: Omit<CartItem, 'id' | 'total'>) => void;
+  addItem: (item: Omit<CartItem, 'id' | 'total' | 'cost'> & { id?: string; cost?: number }) => void;
   removeItem: (id: string) => void;
   updateQty: (id: string, qty: number) => void;
   incrementQty: (id: string, delta: number) => void;
   updatePrice: (id: string, price: number) => void;
+  updateCost: (id: string, cost: number) => void;
   updateName: (id: string, name: string) => void;
   setDiscount: (d: number) => void;
   setPaymentType: (t: 'CASH' | 'CARD' | 'UDHAAR') => void;
@@ -70,7 +73,8 @@ export const useBillingStore = create<BillingStore>((set, get) => ({
       }
       const newItem: CartItem = {
         ...item,
-        id: `${Date.now()}-${Math.random()}`,
+        id: item.id ?? `${Date.now()}-${Math.random()}`,
+        cost: item.cost ?? 0,
         total: item.quantity * item.price,
       };
       return { cart: [...state.cart, newItem] };
@@ -98,6 +102,11 @@ export const useBillingStore = create<BillingStore>((set, get) => ({
       cart: state.cart.map((c) =>
         c.id === id ? { ...c, price, total: c.quantity * price } : c
       ),
+    })),
+
+  updateCost: (id, cost) =>
+    set((state) => ({
+      cart: state.cart.map((c) => (c.id === id ? { ...c, cost } : c)),
     })),
 
   updateName: (id, name) =>

@@ -54,6 +54,10 @@ export default function BillingPage() {
   const customerSearchRef = useRef<HTMLInputElement>(null);
   const splitRef = useRef<HTMLDivElement>(null);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
+  const nameInputRefs = useRef(new Map<string, HTMLInputElement>());
+  const priceInputRefs = useRef(new Map<string, HTMLInputElement>());
+  const costInputRefs = useRef(new Map<string, HTMLInputElement>());
+  const qtyInputRefs = useRef(new Map<string, HTMLInputElement>());
 
   const [cartWidth, setCartWidth] = useState(DEFAULT_CART_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
@@ -72,7 +76,7 @@ export default function BillingPage() {
 
   const {
     cart, discount, paymentType, selectedCustomer, heldBills, cashTendered,
-    addItem, removeItem, incrementQty, updatePrice, updateName, setDiscount,
+    addItem, removeItem, incrementQty, updateQty, updatePrice, updateCost, updateName, setDiscount,
     setPaymentType, setCustomer, setCashTendered, clearCart, holdCurrent, resumeHeld, removeHeld,
     subtotal, grandTotal, changeDue,
   } = useBillingStore();
@@ -222,7 +226,12 @@ export default function BillingPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: cart.map((c) => ({ itemId: c.itemId, name: c.name, quantity: c.quantity, price: c.price, total: c.total })),
+          items: cart.map((c) => ({
+            itemId: c.itemId, name: c.name, quantity: c.quantity, price: c.price, total: c.total,
+            // Only custom items carry an explicit cost override — catalog items keep pulling
+            // their cost from the item record so historical reports stay consistent.
+            costPrice: c.itemId === null ? c.cost : undefined,
+          })),
           discount,
           paymentType: effectiveType,
           customerId: selectedCustomer?.id || null,
@@ -282,9 +291,30 @@ export default function BillingPage() {
     }
   };
 
+  const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
+
+  // Runs after React commits the new cart row, so the ref is guaranteed to exist —
+  // unlike requestAnimationFrame right after the state update, which isn't reliably
+  // ordered after the commit when triggered from a native (non-React) key handler.
+  useEffect(() => {
+    if (!pendingFocusId) return;
+    const el = nameInputRefs.current.get(pendingFocusId);
+    el?.focus();
+    el?.select();
+    setPendingFocusId(null);
+  }, [pendingFocusId]);
+
   const addCustomItem = useCallback(() => {
-    addItem({ itemId: null, name: 'Custom Item', quantity: 1, price: 0 });
+    const id = `custom-${Date.now()}-${Math.random()}`;
+    addItem({ id, itemId: null, name: '', quantity: 1, price: 0 });
+    setPendingFocusId(id);
   }, [addItem]);
+
+  const focusAndSelect = (map: { current: Map<string, HTMLInputElement> }, id: string) => {
+    const el = map.current.get(id);
+    el?.focus();
+    el?.select();
+  };
 
   const holdBill = useCallback(() => {
     if (cart.length === 0) return;
@@ -306,6 +336,8 @@ export default function BillingPage() {
       else if (e.key === 'F6') { e.preventDefault(); selectPaymentType('UDHAAR'); setTimeout(() => customerSearchRef.current?.focus(), 50); }
       else if (e.key === 'F7') { e.preventDefault(); discountRef.current?.focus(); discountRef.current?.select(); }
       else if (e.key === 'F8') { e.preventDefault(); if (cart.length > 0 && confirm('Void the entire current order?')) { clearCart(); setTenderedTouched(false); } }
+      else if (e.key === 'F9') { e.preventDefault(); handleCheckout(true); }
+      else if (e.key === 'F10') { e.preventDefault(); handleCheckout(false); }
       else if (e.altKey && e.key.toLowerCase() === 'c') { e.preventDefault(); addCustomItem(); }
       else if ((e.key === '/' || e.key === ' ') && !typingInField) { e.preventDefault(); searchRef.current?.focus(); }
       else if (e.key === 'Escape') { setShowDropdown(false); setShowHeld(false); }
@@ -383,6 +415,8 @@ export default function BillingPage() {
               <div className="hidden 2xl:flex items-center gap-1.5 text-[11px] text-slate-400">
                 <kbd className="px-1.5 py-1 bg-white border border-slate-200 rounded-md">Space</kbd>search
                 <kbd className="px-1.5 py-1 bg-white border border-slate-200 rounded-md">F1-F3</kbd>pay
+                <kbd className="px-1.5 py-1 bg-white border border-slate-200 rounded-md">F9</kbd>checkout
+                <kbd className="px-1.5 py-1 bg-white border border-slate-200 rounded-md">F10</kbd>checkout only
                 <kbd className="px-1.5 py-1 bg-white border border-slate-200 rounded-md">F7</kbd>discount
                 <kbd className="px-1.5 py-1 bg-white border border-slate-200 rounded-md">F8</kbd>void
                 <kbd className="px-1.5 py-1 bg-white border border-slate-200 rounded-md">Alt+C</kbd>custom
@@ -553,29 +587,71 @@ export default function BillingPage() {
                     <div className="flex-1 min-w-0">
                       {item.itemId === null ? (
                         <input
+                          ref={(el) => { if (el) nameInputRefs.current.set(item.id, el); else nameInputRefs.current.delete(item.id); }}
                           type="text"
                           value={item.name}
                           onChange={(e) => updateName(item.id, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); focusAndSelect(priceInputRefs, item.id); }
+                          }}
                           className="w-full h-7 bg-slate-800 border border-slate-600 rounded-lg text-sm px-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
                           placeholder="Custom item name..."
                         />
                       ) : (
                         <p className="text-sm font-medium truncate">{item.name}</p>
                       )}
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <span className="text-[11px] text-slate-500">Sale Rs.</span>
                         <input
+                          ref={(el) => { if (el) priceInputRefs.current.set(item.id, el); else priceInputRefs.current.delete(item.id); }}
                           type="number"
                           min="0"
                           value={item.price}
                           onChange={(e) => updatePrice(item.id, Number(e.target.value))}
+                          onFocus={(e) => e.target.select()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              focusAndSelect(item.itemId === null ? costInputRefs : qtyInputRefs, item.id);
+                            }
+                          }}
                           className="w-16 h-6 bg-slate-800 border border-slate-700 rounded text-xs px-1.5 text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
                         />
+                        {item.itemId === null && (
+                          <>
+                            <span className="text-[11px] text-slate-500">Cost Rs.</span>
+                            <input
+                              ref={(el) => { if (el) costInputRefs.current.set(item.id, el); else costInputRefs.current.delete(item.id); }}
+                              type="number"
+                              min="0"
+                              value={item.cost}
+                              onChange={(e) => updateCost(item.id, Number(e.target.value))}
+                              onFocus={(e) => e.target.select()}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') { e.preventDefault(); focusAndSelect(qtyInputRefs, item.id); }
+                              }}
+                              title="What this item cost you — used for profit reports"
+                              className="w-16 h-6 bg-slate-800 border border-amber-700/60 rounded text-xs px-1.5 text-amber-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                            />
+                          </>
+                        )}
                         <span className="text-[11px] text-slate-500">× {item.quantity}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1 bg-slate-800 rounded-lg px-1 py-1">
                       <button onClick={() => incrementQty(item.id, -1)} className="w-7 h-7 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700 rounded-md"><Minus size={14} /></button>
-                      <span className="w-7 text-center text-sm font-bold">{item.quantity}</span>
+                      <input
+                        ref={(el) => { if (el) qtyInputRefs.current.set(item.id, el); else qtyInputRefs.current.delete(item.id); }}
+                        type="number"
+                        min="0"
+                        value={item.quantity}
+                        onChange={(e) => updateQty(item.id, Number(e.target.value))}
+                        onFocus={(e) => e.target.select()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); searchRef.current?.focus(); }
+                        }}
+                        className="w-10 h-7 text-center text-sm font-bold bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-500 rounded"
+                      />
                       <button onClick={() => incrementQty(item.id, 1)} className="w-7 h-7 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700 rounded-md"><Plus size={14} /></button>
                     </div>
                     <div className="w-20 text-right font-bold text-sm">{formatCurrency(item.total)}</div>
@@ -737,19 +813,22 @@ export default function BillingPage() {
               <button
                 onClick={() => handleCheckout(true)}
                 disabled={processing || cart.length === 0}
-                className="flex-[3] flex items-center justify-center gap-2 bg-green-600 hover:bg-green-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-2xl transition-all text-base"
+                title="Checkout & Print (F9)"
+                className="relative flex-[3] flex items-center justify-center gap-2 bg-green-600 hover:bg-green-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-2xl transition-all text-base"
               >
                 <Printer size={19} />
                 {processing ? 'Processing...' : 'Checkout & Print'}
+                <kbd className="absolute top-1.5 right-2 text-[9px] font-bold text-white/60">F9</kbd>
               </button>
               <button
                 onClick={() => handleCheckout(false)}
                 disabled={processing || cart.length === 0}
-                title="Checkout without printing a receipt"
-                className="flex-[2] flex items-center justify-center gap-2 bg-emerald-800/60 hover:bg-emerald-800 disabled:bg-slate-700 disabled:cursor-not-allowed text-emerald-100 font-bold py-3.5 rounded-2xl transition-all text-sm"
+                title="Checkout without printing a receipt (F10)"
+                className="relative flex-[2] flex items-center justify-center gap-2 bg-emerald-800/60 hover:bg-emerald-800 disabled:bg-slate-700 disabled:cursor-not-allowed text-emerald-100 font-bold py-3.5 rounded-2xl transition-all text-sm"
               >
                 <CheckCircle2 size={17} />
                 Checkout Only
+                <kbd className="absolute top-1.5 right-2 text-[9px] font-bold text-emerald-100/60">F10</kbd>
               </button>
             </div>
             <div className="flex gap-2">

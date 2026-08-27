@@ -19,6 +19,7 @@ import {
   CalendarRange,
   TrendingUp,
   Boxes,
+  BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -38,6 +39,7 @@ const reportItems = [
   { href: '/reports/monthly', label: 'Monthly Report', icon: CalendarRange },
   { href: '/reports/yearly', label: 'Yearly Report', icon: TrendingUp },
   { href: '/reports/inventory', label: 'Inventory Report', icon: Boxes },
+  { href: '/reports/products', label: 'Product Report', icon: BarChart3 },
 ];
 
 const bottomItems = [

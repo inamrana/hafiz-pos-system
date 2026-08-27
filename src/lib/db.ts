@@ -123,7 +123,8 @@ CREATE TABLE IF NOT EXISTS bill_items (
   quantity REAL NOT NULL,
   price REAL NOT NULL,
   total REAL NOT NULL,
-  returned_quantity REAL NOT NULL DEFAULT 0
+  returned_quantity REAL NOT NULL DEFAULT 0,
+  cost_price REAL
 );
 CREATE INDEX IF NOT EXISTS idx_bill_items_bill ON bill_items(bill_id);
 
@@ -171,6 +172,19 @@ function getRawClient(): Client {
   return global.__libsqlClient;
 }
 
+/**
+ * Adds columns that were introduced after this table's original CREATE TABLE,
+ * for databases created before the column existed. CREATE TABLE IF NOT EXISTS
+ * doesn't touch existing tables, so new columns need an explicit, idempotent
+ * ALTER TABLE — checked against PRAGMA table_info so re-running it (every
+ * server start) is a no-op once the column is there.
+ */
+async function addColumnIfMissing(client: Client, table: string, column: string, ddl: string) {
+  const info = await client.execute(`PRAGMA table_info(${table})`);
+  const exists = info.rows.some((r) => (r as unknown as { name: string }).name === column);
+  if (!exists) await client.execute(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+
 /** Runs schema migrations exactly once per process, lazily on first real use. */
 export function ready(): Promise<void> {
   if (!global.__libsqlReady) {
@@ -180,6 +194,7 @@ export function ready(): Promise<void> {
       for (const sql of statements) {
         await client.execute(sql);
       }
+      await addColumnIfMissing(client, 'bill_items', 'cost_price', 'cost_price REAL');
     })();
   }
   return global.__libsqlReady;

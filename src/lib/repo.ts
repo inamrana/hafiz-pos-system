@@ -285,7 +285,7 @@ export const customersRepo = {
 
 // ── BILLS ────────────────────────────────────────────────────────────────────
 interface BillInput {
-  items: { itemId: number | null; name: string; quantity: number; price: number; total: number }[];
+  items: { itemId: number | null; name: string; quantity: number; price: number; total: number; costPrice?: number | null }[];
   discount: number;
   paymentType: 'CASH' | 'CARD' | 'UDHAAR';
   customerId: number | null;
@@ -318,8 +318,8 @@ export const billsRepo = {
 
       for (const line of input.items) {
         await db
-          .prepare('INSERT INTO bill_items (bill_id, item_id, name, quantity, price, total) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(billId, line.itemId, line.name, line.quantity, line.price, line.total);
+          .prepare('INSERT INTO bill_items (bill_id, item_id, name, quantity, price, total, cost_price) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(billId, line.itemId, line.name, line.quantity, line.price, line.total, line.costPrice ?? null);
         if (line.itemId) await deductStock(line.itemId, line.quantity);
       }
 
@@ -458,7 +458,7 @@ export const reportsRepo = {
       .prepare<DailyBillRow>(
         `SELECT b.id, b.bill_number, b.created_at, b.customer_name, b.payment_type, b.status, b.total,
                 (SELECT COUNT(*) FROM bill_items bi WHERE bi.bill_id = b.id) AS item_count,
-                (SELECT COALESCE(SUM(bi.quantity * COALESCE(i.cost_price, 0)), 0)
+                (SELECT COALESCE(SUM(bi.quantity * COALESCE(bi.cost_price, i.cost_price, 0)), 0)
                    FROM bill_items bi LEFT JOIN items i ON i.id = bi.item_id
                   WHERE bi.bill_id = b.id) AS cost
            FROM bills b
@@ -493,7 +493,7 @@ export const reportsRepo = {
 
     const costRows = await db
       .prepare<{ month: string; cost: number }>(
-        `SELECT strftime('%Y-%m', b.created_at) AS month, COALESCE(SUM(bi.quantity * COALESCE(i.cost_price, 0)), 0) AS cost
+        `SELECT strftime('%Y-%m', b.created_at) AS month, COALESCE(SUM(bi.quantity * COALESCE(bi.cost_price, i.cost_price, 0)), 0) AS cost
            FROM bill_items bi JOIN bills b ON b.id = bi.bill_id LEFT JOIN items i ON i.id = bi.item_id
           WHERE b.status != 'RETURNED' AND b.created_at >= ?
           GROUP BY month`
@@ -543,7 +543,7 @@ export const reportsRepo = {
 
     const costRows = await db
       .prepare<{ year: string; cost: number }>(
-        `SELECT strftime('%Y', b.created_at) AS year, COALESCE(SUM(bi.quantity * COALESCE(i.cost_price, 0)), 0) AS cost
+        `SELECT strftime('%Y', b.created_at) AS year, COALESCE(SUM(bi.quantity * COALESCE(bi.cost_price, i.cost_price, 0)), 0) AS cost
            FROM bill_items bi JOIN bills b ON b.id = bi.bill_id LEFT JOIN items i ON i.id = bi.item_id
           WHERE b.status != 'RETURNED' AND b.created_at >= ?
           GROUP BY year`
@@ -606,6 +606,70 @@ export const reportsRepo = {
         outOfStockCount: outOfStock.c,
       },
     };
+  },
+
+  /** What sold, how much it cost, and the resulting profit — grouped per product, over an optional date range. */
+  async products(opts: { from?: string; to?: string } = {}) {
+    const db = await currentDb();
+    const clauses: string[] = ["b.status != 'RETURNED'"];
+    const params: string[] = [];
+    if (opts.from) { clauses.push('b.created_at >= ?'); params.push(opts.from); }
+    if (opts.to) { clauses.push('b.created_at <= ?'); params.push(opts.to); }
+    const where = `WHERE ${clauses.join(' AND ')}`;
+
+    const rows = await db
+      .prepare<{ item_id: number | null; name: string; category: string; quantitySold: number; revenue: number; cost: number }>(
+        `SELECT bi.item_id AS item_id,
+                bi.name AS name,
+                COALESCE(i.category, 'Custom') AS category,
+                SUM(bi.quantity) AS quantitySold,
+                SUM(bi.total) AS revenue,
+                SUM(bi.quantity * COALESCE(bi.cost_price, i.cost_price, 0)) AS cost
+           FROM bill_items bi
+           JOIN bills b ON b.id = bi.bill_id
+           LEFT JOIN items i ON i.id = bi.item_id
+           ${where}
+          GROUP BY bi.item_id, bi.name
+          ORDER BY revenue DESC`
+      )
+      .all(...params);
+
+    const products = rows.map((r) => ({ ...r, profit: r.revenue - r.cost }));
+    const totalRevenue = products.reduce((s, p) => s + p.revenue, 0);
+    const totalCost = products.reduce((s, p) => s + p.cost, 0);
+    const totalQuantity = products.reduce((s, p) => s + p.quantitySold, 0);
+
+    return {
+      products,
+      totals: { totalRevenue, totalCost, totalProfit: totalRevenue - totalCost, totalQuantity, productCount: products.length },
+    };
+  },
+
+  /** A single bill with per-line cost/profit — for drilling into "what did this sale actually make". */
+  async billDetail(billId: number) {
+    const db = await currentDb();
+    const bill = await db.prepare<Bill>('SELECT * FROM bills WHERE id = ?').get(billId);
+    if (!bill) return null;
+
+    const lines = await db
+      .prepare<{
+        id: number; item_id: number | null; name: string; quantity: number; price: number;
+        total: number; returned_quantity: number; cost_price: number;
+      }>(
+        `SELECT bi.id, bi.item_id, bi.name, bi.quantity, bi.price, bi.total, bi.returned_quantity,
+                COALESCE(bi.cost_price, i.cost_price, 0) AS cost_price
+           FROM bill_items bi LEFT JOIN items i ON i.id = bi.item_id
+          WHERE bi.bill_id = ?`
+      )
+      .all(billId);
+
+    const items = lines.map((l) => {
+      const cost = l.quantity * l.cost_price;
+      return { ...l, cost, profit: l.total - cost };
+    });
+    const totalCost = items.reduce((s, i) => s + i.cost, 0);
+
+    return { ...bill, items, totalCost, profit: bill.total - totalCost };
   },
 };
 

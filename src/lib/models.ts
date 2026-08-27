@@ -107,6 +107,7 @@ export interface BillItem {
   price: number;
   total: number;
   returned_quantity: number;
+  cost_price: number | null;
 }
 
 export interface ReturnRecord {
