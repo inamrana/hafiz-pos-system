@@ -281,6 +281,12 @@ export const customersRepo = {
       .run(customerId, amount, 'PAYMENT', notes || '');
     return (await this.getById(customerId))!;
   },
+  async remove(id: number) {
+    const db = await currentDb();
+    // Past bills keep their own customer_name text, so removing the customer record
+    // doesn't affect bill history — only the ledger (cascades) and future lookups.
+    await db.prepare('DELETE FROM customers WHERE id = ?').run(id);
+  },
 };
 
 // ── BILLS ────────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Plus, Search, Edit2, Trash2, AlertTriangle, X, Upload, Download, Barcode as BarcodeIcon } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, AlertTriangle, X, Upload, Download, Printer, Barcode as BarcodeIcon } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { formatCurrency } from '@/lib/utils';
 
@@ -37,13 +37,17 @@ function StockPageClient() {
   const [showLowStockOnly, setShowLowStockOnly] = useState(false);
   const [importError, setImportError] = useState('');
   const [importSummary, setImportSummary] = useState('');
+  const [shop, setShop] = useState({ shopName: 'Mart POS' });
 
   const load = async (q = '') => {
     const res = await fetch(`/api/items?q=${encodeURIComponent(q)}`);
     setItems(await res.json());
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    fetch('/api/settings').then((r) => r.json()).then((s) => setShop({ shopName: s.shopName || 'Mart POS' }));
+    load();
+  }, []);
   useEffect(() => { const t = setTimeout(() => load(search), 250); return () => clearTimeout(t); }, [search]);
   useEffect(() => { setShowLowStockOnly(filterParam === 'low'); }, [filterParam]);
 
@@ -91,6 +95,12 @@ function StockPageClient() {
   };
 
   const displayedItems = items.filter((i) => !showLowStockOnly || i.quantity <= i.low_stock_threshold);
+
+  // Printed low-stock lists are for reordering — lowest quantity first so the most
+  // urgent items are at the top of the page, not buried alphabetically.
+  const printItems = showLowStockOnly
+    ? [...displayedItems].sort((a, b) => a.quantity - b.quantity)
+    : displayedItems;
 
   const exportExcel = () => {
     const rows = items.map((i) => ({
@@ -187,12 +197,48 @@ function StockPageClient() {
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      {/* Print-only stock/low-stock list */}
+      <div className="print-only p-4">
+        <h1 className="text-xl font-bold">{shop.shopName}</h1>
+        <p className="text-sm font-semibold mt-1">{showLowStockOnly ? 'Low Stock List' : 'Stock List'}{search.trim() ? ` — matching "${search.trim()}"` : ''}</p>
+        <p className="text-xs text-slate-500" suppressHydrationWarning>{new Date().toLocaleString()} · {printItems.length} item{printItems.length !== 1 ? 's' : ''}</p>
+        <table className="w-full mt-3 text-sm">
+          <thead>
+            <tr className="border-b border-black text-left">
+              <th className="py-1 pr-2">Name</th>
+              <th className="py-1 pr-2">Category</th>
+              <th className="py-1 pr-2">Barcode</th>
+              <th className="py-1 pr-2 text-right">Cost</th>
+              <th className="py-1 pr-2 text-right">Sale</th>
+              <th className="py-1 pr-2 text-right">Qty</th>
+              <th className="py-1">Unit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {printItems.map((item) => (
+              <tr key={item.id} className="border-b border-slate-300">
+                <td className="py-1 pr-2">{item.name}</td>
+                <td className="py-1 pr-2">{item.category}</td>
+                <td className="py-1 pr-2">{item.barcode || '—'}</td>
+                <td className="py-1 pr-2 text-right">{formatCurrency(item.cost_price)}</td>
+                <td className="py-1 pr-2 text-right">{formatCurrency(item.sale_price)}</td>
+                <td className="py-1 pr-2 text-right font-bold">{item.quantity}</td>
+                <td className="py-1">{item.unit}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="no-print flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Stock & Inventory</h1>
           <p className="text-slate-500 text-sm mt-0.5">{items.length} items total</p>
         </div>
         <div className="flex gap-2">
+          <button onClick={() => window.print()} className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold transition-colors">
+            <Printer size={16} /> Print
+          </button>
           <button onClick={exportExcel} className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold transition-colors">
             <Download size={16} /> Export
           </button>
@@ -206,82 +252,84 @@ function StockPageClient() {
         </div>
       </div>
 
-      {importSummary && <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-xl text-sm font-medium">{importSummary}</div>}
-      {importError && <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">{importError}</div>}
+      <div className="no-print">
+        {importSummary && <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-xl text-sm font-medium">{importSummary}</div>}
+        {importError && <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">{importError}</div>}
 
-      {items.filter((i) => i.quantity <= i.low_stock_threshold).length > 0 && (
-        <div className="mb-4 flex items-center gap-3 bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl">
-          <AlertTriangle size={18} />
-          <span className="font-semibold">{items.filter((i) => i.quantity <= i.low_stock_threshold).length} items are low on stock</span>
-        </div>
-      )}
+        {items.filter((i) => i.quantity <= i.low_stock_threshold).length > 0 && (
+          <div className="mb-4 flex items-center gap-3 bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl">
+            <AlertTriangle size={18} />
+            <span className="font-semibold">{items.filter((i) => i.quantity <= i.low_stock_threshold).length} items are low on stock</span>
+          </div>
+        )}
 
-      <div className="flex flex-col sm:flex-row gap-4 mb-4 items-center justify-between">
-        <div className="relative flex-1 w-full">
-          <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name, category, or barcode..."
-            className="w-full pl-10 pr-4 py-3 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-          />
+        <div className="flex flex-col sm:flex-row gap-4 mb-4 items-center justify-between">
+          <div className="relative flex-1 w-full">
+            <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name, category, or barcode..."
+              className="w-full pl-10 pr-4 py-3 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            />
+          </div>
+          <div className="flex bg-slate-200/60 p-1 rounded-xl">
+            <button onClick={() => setShowLowStockOnly(false)} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${!showLowStockOnly ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>All Items</button>
+            <button onClick={() => setShowLowStockOnly(true)} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${showLowStockOnly ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>Low Stock Only</button>
+          </div>
         </div>
-        <div className="flex bg-slate-200/60 p-1 rounded-xl">
-          <button onClick={() => setShowLowStockOnly(false)} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${!showLowStockOnly ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>All Items</button>
-          <button onClick={() => setShowLowStockOnly(true)} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${showLowStockOnly ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>Low Stock Only</button>
-        </div>
-      </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200">
-              <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">ID</th>
-              <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">Barcode</th>
-              <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">Name</th>
-              <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">Category</th>
-              <th className="px-5 py-3 text-right text-xs font-bold text-slate-500 uppercase">Cost</th>
-              <th className="px-5 py-3 text-right text-xs font-bold text-slate-500 uppercase">Sale Price</th>
-              <th className="px-5 py-3 text-center text-xs font-bold text-slate-500 uppercase">Stock</th>
-              <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">Unit</th>
-              <th className="px-5 py-3"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {displayedItems.length === 0 ? (
-              <tr><td colSpan={9} className="text-center py-8 text-slate-400 text-sm">No items found.</td></tr>
-            ) : (
-              displayedItems.map((item) => (
-                <tr key={item.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                  <td className="px-5 py-3.5 text-slate-400 text-sm font-mono">{item.id}</td>
-                  <td className="px-5 py-3.5 text-slate-500 text-xs font-mono">
-                    {item.barcode ? <span className="flex items-center gap-1"><BarcodeIcon size={12} />{item.barcode}</span> : '—'}
-                  </td>
-                  <td className="px-5 py-3.5 font-semibold text-sm">{item.name}</td>
-                  <td className="px-5 py-3.5"><span className="bg-blue-50 text-blue-700 text-xs font-semibold px-2.5 py-1 rounded-full">{item.category}</span></td>
-                  <td className="px-5 py-3.5 text-right text-sm text-slate-500">{formatCurrency(item.cost_price)}</td>
-                  <td className="px-5 py-3.5 text-right font-bold text-sm text-slate-800">{formatCurrency(item.sale_price)}</td>
-                  <td className="px-5 py-3.5 text-center">
-                    <span className={`text-sm font-bold px-2 py-0.5 rounded-lg ${item.quantity <= item.low_stock_threshold ? 'bg-red-100 text-red-600' : item.quantity <= item.low_stock_threshold * 3 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                      {item.quantity}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5 text-sm text-slate-500">{item.unit}{item.unit_type === 'WEIGHT' ? ' (wt)' : ''}</td>
-                  <td className="px-5 py-3.5">
-                    <div className="flex gap-2 justify-end">
-                      <button onClick={() => openEdit(item)} className="text-slate-400 hover:text-blue-600 transition-colors"><Edit2 size={15} /></button>
-                      <button onClick={() => del(item.id)} className="text-slate-400 hover:text-red-600 transition-colors"><Trash2 size={15} /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200">
+                <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">ID</th>
+                <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">Barcode</th>
+                <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">Name</th>
+                <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">Category</th>
+                <th className="px-5 py-3 text-right text-xs font-bold text-slate-500 uppercase">Cost</th>
+                <th className="px-5 py-3 text-right text-xs font-bold text-slate-500 uppercase">Sale Price</th>
+                <th className="px-5 py-3 text-center text-xs font-bold text-slate-500 uppercase">Stock</th>
+                <th className="px-5 py-3 text-left text-xs font-bold text-slate-500 uppercase">Unit</th>
+                <th className="px-5 py-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayedItems.length === 0 ? (
+                <tr><td colSpan={9} className="text-center py-8 text-slate-400 text-sm">No items found.</td></tr>
+              ) : (
+                displayedItems.map((item) => (
+                  <tr key={item.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                    <td className="px-5 py-3.5 text-slate-400 text-sm font-mono">{item.id}</td>
+                    <td className="px-5 py-3.5 text-slate-500 text-xs font-mono">
+                      {item.barcode ? <span className="flex items-center gap-1"><BarcodeIcon size={12} />{item.barcode}</span> : '—'}
+                    </td>
+                    <td className="px-5 py-3.5 font-semibold text-sm">{item.name}</td>
+                    <td className="px-5 py-3.5"><span className="bg-blue-50 text-blue-700 text-xs font-semibold px-2.5 py-1 rounded-full">{item.category}</span></td>
+                    <td className="px-5 py-3.5 text-right text-sm text-slate-500">{formatCurrency(item.cost_price)}</td>
+                    <td className="px-5 py-3.5 text-right font-bold text-sm text-slate-800">{formatCurrency(item.sale_price)}</td>
+                    <td className="px-5 py-3.5 text-center">
+                      <span className={`text-sm font-bold px-2 py-0.5 rounded-lg ${item.quantity <= item.low_stock_threshold ? 'bg-red-100 text-red-600' : item.quantity <= item.low_stock_threshold * 3 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                        {item.quantity}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3.5 text-sm text-slate-500">{item.unit}{item.unit_type === 'WEIGHT' ? ' (wt)' : ''}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="flex gap-2 justify-end">
+                        <button onClick={() => openEdit(item)} className="text-slate-400 hover:text-blue-600 transition-colors"><Edit2 size={15} /></button>
+                        <button onClick={() => del(item.id)} className="text-slate-400 hover:text-red-600 transition-colors"><Trash2 size={15} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {showModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="no-print fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-6 border-b border-slate-200">
               <h2 className="text-lg font-bold">{editItem ? 'Edit Item' : 'Add New Item'}</h2>

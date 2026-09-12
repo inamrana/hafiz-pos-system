@@ -26,3 +26,12 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json(customer);
   });
 }
+
+export async function DELETE(req: NextRequest) {
+  return withAuth(req, async () => {
+    const id = Number(req.nextUrl.searchParams.get('id'));
+    if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
+    await customersRepo.remove(id);
+    return NextResponse.json({ success: true });
+  });
+}

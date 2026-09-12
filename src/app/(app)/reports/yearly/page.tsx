@@ -61,10 +61,13 @@ export default function YearlyReportPage() {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+      {/* 5-year combined totals — screen only. On print, the year-by-year table below
+          is the report; a collective figure up top would read as "one lump sum" instead
+          of a breakdown. */}
+      <div className="no-print grid grid-cols-2 xl:grid-cols-4 gap-4">
         {cards.map((c) => (
           <div key={c.label} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-            <p className="text-sm font-medium text-slate-400">{c.label}</p>
+            <p className="text-sm font-medium text-slate-400">{c.label} <span className="font-normal text-slate-300">(5yr)</span></p>
             <p className={`text-2xl font-black leading-tight mt-1 ${c.color}`}>{c.value}</p>
           </div>
         ))}
@@ -114,6 +117,17 @@ export default function YearlyReportPage() {
                 </tr>
               ))}
             </tbody>
+            {data && (
+              <tfoot>
+                <tr className="bg-slate-50 border-t border-slate-200 text-sm font-bold">
+                  <td className="px-5 py-3">5-Year Total</td>
+                  <td className="px-5 py-3 text-center">{data.totals.billCount}</td>
+                  <td className="px-5 py-3 text-right">{formatCurrency(data.totals.totalSales)}</td>
+                  <td className="px-5 py-3 text-right">{formatCurrency(data.totals.totalCost)}</td>
+                  <td className={`px-5 py-3 text-right ${data.totals.netProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(data.totals.netProfit)}</td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Search, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Search, Plus, X, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import { formatCurrency, parseServerDate } from '@/lib/utils';
 
 interface LedgerEntry { amount: number; type: string; date: string; notes: string; }
@@ -37,6 +37,15 @@ export default function UdhaarPage() {
   };
 
   const totalOutstanding = customers.reduce((s, c) => s + c.balance, 0);
+
+  const deleteCustomer = async (c: Customer) => {
+    const warning = c.balance > 0
+      ? `${c.name} still has an outstanding balance of ${formatCurrency(c.balance)}. Delete anyway? This removes their ledger history too — it will NOT affect past bills.`
+      : `Delete ${c.name}? This removes their ledger history too — it will NOT affect past bills.`;
+    if (!confirm(warning)) return;
+    await fetch(`/api/customers?id=${c.id}`, { method: 'DELETE' });
+    load(search);
+  };
 
   return (
     <div className="p-6">
@@ -79,6 +88,9 @@ export default function UdhaarPage() {
                 )}
                 <button onClick={() => setExpanded(expanded === c.id ? null : c.id)} className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100">
                   {expanded === c.id ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                </button>
+                <button onClick={() => deleteCustomer(c)} title="Delete customer" className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50">
+                  <Trash2 size={16} />
                 </button>
               </div>
             </div>
