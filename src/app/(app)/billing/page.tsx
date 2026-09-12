@@ -67,8 +67,8 @@ export default function BillingPage() {
   const [activeCategory, setActiveCategory] = useState('All');
 
   const [customerSearch, setCustomerSearch] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
   const [customerSuggestions, setCustomerSuggestions] = useState<Customer[]>([]);
-  const [showCustomerSearch, setShowCustomerSearch] = useState(false);
 
   const [shop, setShop] = useState({ shopName: 'Mart POS', address: '', phone: '', receiptFooter: '' });
   const [showHeld, setShowHeld] = useState(false);
@@ -194,7 +194,6 @@ export default function BillingPage() {
   const selectPaymentType = (type: 'CASH' | 'CARD' | 'UDHAAR') => {
     setPaymentType(type);
     setTenderedTouched(false);
-    setShowCustomerSearch(type === 'UDHAAR');
   };
 
   const addFromCatalog = (item: Item) => {
@@ -204,6 +203,7 @@ export default function BillingPage() {
       quantity: item.unit_type === 'WEIGHT' ? 0.5 : 1,
       price: item.sale_price,
     });
+    setPendingFocusItemId(item.id);
   };
 
   // ── Checkout ─────────────────────────────────────────────────────────────
@@ -265,7 +265,7 @@ export default function BillingPage() {
     addFromCatalog(item);
     setSearch('');
     setShowDropdown(false);
-    searchRef.current?.focus();
+    // Focus moves to the new row's quantity field instead (see pendingFocusItemId effect).
   };
 
   const handleSearchKeyDown = (e: React.KeyboardEvent) => {
@@ -292,6 +292,7 @@ export default function BillingPage() {
   };
 
   const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
+  const [pendingFocusItemId, setPendingFocusItemId] = useState<number | null>(null);
 
   // Runs after React commits the new cart row, so the ref is guaranteed to exist —
   // unlike requestAnimationFrame right after the state update, which isn't reliably
@@ -303,6 +304,20 @@ export default function BillingPage() {
     el?.select();
     setPendingFocusId(null);
   }, [pendingFocusId]);
+
+  // Catalog items: scanning/selecting the same item twice merges into its existing
+  // row (see addItem in the store), so the row to focus has to be looked up by
+  // itemId rather than a freshly-generated id.
+  useEffect(() => {
+    if (pendingFocusItemId === null) return;
+    const row = cart.find((c) => c.itemId === pendingFocusItemId);
+    if (row) {
+      const el = qtyInputRefs.current.get(row.id);
+      el?.focus();
+      el?.select();
+    }
+    setPendingFocusItemId(null);
+  }, [pendingFocusItemId, cart]);
 
   const addCustomItem = useCallback(() => {
     const id = `custom-${Date.now()}-${Math.random()}`;
@@ -328,12 +343,12 @@ export default function BillingPage() {
     const onKey = (e: KeyboardEvent) => {
       const typingInField = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName || '');
 
-      if (e.key === 'F1') { e.preventDefault(); selectPaymentType('CASH'); handleCheckout(true, 'CASH', total); }
-      else if (e.key === 'F2') { e.preventDefault(); selectPaymentType('CARD'); handleCheckout(true, 'CARD'); }
-      else if (e.key === 'F3') { e.preventDefault(); selectPaymentType('UDHAAR'); handleCheckout(true, 'UDHAAR'); }
+      if (e.key === 'F1') { e.preventDefault(); selectPaymentType('CASH'); }
+      else if (e.key === 'F2') { e.preventDefault(); selectPaymentType('CARD'); }
+      else if (e.key === 'F3') { e.preventDefault(); selectPaymentType('UDHAAR'); }
       else if (e.key === 'F4') { e.preventDefault(); holdBill(); }
       else if (e.key === 'F5') { e.preventDefault(); setShowHeld(true); }
-      else if (e.key === 'F6') { e.preventDefault(); selectPaymentType('UDHAAR'); setTimeout(() => customerSearchRef.current?.focus(), 50); }
+      else if (e.key === 'F6') { e.preventDefault(); customerSearchRef.current?.focus(); }
       else if (e.key === 'F7') { e.preventDefault(); discountRef.current?.focus(); discountRef.current?.select(); }
       else if (e.key === 'F8') { e.preventDefault(); if (cart.length > 0 && confirm('Void the entire current order?')) { clearCart(); setTenderedTouched(false); } }
       else if (e.key === 'F9') { e.preventDefault(); handleCheckout(true); }
@@ -345,7 +360,7 @@ export default function BillingPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handleCheckout, addCustomItem, holdBill, cart, clearCart, total]);
+  }, [handleCheckout, addCustomItem, holdBill, cart, clearCart]);
 
   // ── New customer ────────────────────────────────────────────────────────────
   const createCustomer = async () => {
@@ -354,11 +369,12 @@ export default function BillingPage() {
     const res = await fetch('/api/customers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, phone: customerPhone.trim() }),
     });
     const c = await res.json();
     setCustomer(c);
     setCustomerSearch(c.name);
+    setCustomerPhone('');
     setCustomerSuggestions([]);
   };
 
@@ -479,6 +495,108 @@ export default function BillingPage() {
             )}
           </div>
 
+          {/* Current Sale — the running list of what's actually been added, front and center */}
+          <div className="px-6 pb-3">
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                <h2 className="text-sm font-bold text-slate-700">Current Sale</h2>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-400">{cart.length} item{cart.length !== 1 ? 's' : ''}</span>
+                  {cart.length > 0 && (
+                    <button onClick={clearCart} title="Clear bill" className="text-slate-400 hover:text-red-500 transition-colors">
+                      <ListRestart size={15} />
+                    </button>
+                  )}
+                </div>
+              </div>
+              {cart.length === 0 ? (
+                <div className="py-6 px-4 text-center text-slate-300 text-sm">
+                  Nothing added yet. Scan or tap a product to start this sale.
+                </div>
+              ) : (
+                <div className="max-h-[34vh] overflow-y-auto divide-y divide-slate-100">
+                  {cart.map((item) => (
+                    <div key={item.id} className="px-4 py-2.5 flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        {item.itemId === null ? (
+                          <input
+                            ref={(el) => { if (el) nameInputRefs.current.set(item.id, el); else nameInputRefs.current.delete(item.id); }}
+                            type="text"
+                            value={item.name}
+                            onChange={(e) => updateName(item.id, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.preventDefault(); focusAndSelect(priceInputRefs, item.id); }
+                            }}
+                            className="w-full h-7 bg-slate-50 border border-slate-300 rounded-lg text-sm px-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800"
+                            placeholder="Custom item name..."
+                          />
+                        ) : (
+                          <p className="text-sm font-semibold text-slate-800 truncate">{item.name}</p>
+                        )}
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          <span className="text-[11px] text-slate-400">Sale Rs.</span>
+                          <input
+                            ref={(el) => { if (el) priceInputRefs.current.set(item.id, el); else priceInputRefs.current.delete(item.id); }}
+                            type="number"
+                            min="0"
+                            value={item.price}
+                            onChange={(e) => updatePrice(item.id, Number(e.target.value))}
+                            onFocus={(e) => e.target.select()}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                focusAndSelect(item.itemId === null ? costInputRefs : qtyInputRefs, item.id);
+                              }
+                            }}
+                            className="w-16 h-6 bg-slate-50 border border-slate-200 rounded text-xs px-1.5 text-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          />
+                          {item.itemId === null && (
+                            <>
+                              <span className="text-[11px] text-amber-600">Cost Rs.</span>
+                              <input
+                                ref={(el) => { if (el) costInputRefs.current.set(item.id, el); else costInputRefs.current.delete(item.id); }}
+                                type="number"
+                                min="0"
+                                value={item.cost}
+                                onChange={(e) => updateCost(item.id, Number(e.target.value))}
+                                onFocus={(e) => e.target.select()}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') { e.preventDefault(); focusAndSelect(qtyInputRefs, item.id); }
+                                }}
+                                title="What this item cost you — used for profit reports"
+                                className="w-16 h-6 bg-amber-50 border border-amber-300 rounded text-xs px-1.5 text-amber-700 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                              />
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-1 py-1">
+                        <button onClick={() => incrementQty(item.id, -1)} className="w-7 h-7 flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-md"><Minus size={14} /></button>
+                        <input
+                          ref={(el) => { if (el) qtyInputRefs.current.set(item.id, el); else qtyInputRefs.current.delete(item.id); }}
+                          type="number"
+                          min="0"
+                          value={item.quantity}
+                          onChange={(e) => updateQty(item.id, Number(e.target.value))}
+                          onFocus={(e) => e.target.select()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); searchRef.current?.focus(); }
+                          }}
+                          className="w-10 h-7 text-center text-sm font-bold bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-500 rounded text-slate-800"
+                        />
+                        <button onClick={() => incrementQty(item.id, 1)} className="w-7 h-7 flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-md"><Plus size={14} /></button>
+                      </div>
+                      <div className="w-20 text-right font-bold text-sm text-slate-800">{formatCurrency(item.total)}</div>
+                      <button onClick={() => removeItem(item.id)} className="text-slate-300 hover:text-red-500 transition-colors">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Category tabs */}
           <div className="px-6 pb-3 flex gap-2 overflow-x-auto">
             {categories.map((c) => (
@@ -560,108 +678,11 @@ export default function BillingPage() {
           <div className="absolute inset-y-0 -left-1.5 -right-1.5" />
         </div>
 
-        {/* RIGHT: CART / CHECKOUT */}
-        <div style={{ width: cartWidth }} className="flex-shrink-0 bg-slate-900 text-white flex flex-col">
-          <div className="p-5 border-b border-slate-700 flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-bold">Current Sale</h2>
-              <p className="text-slate-400 text-xs mt-0.5">{cart.length} item{cart.length !== 1 ? 's' : ''} in cart</p>
-            </div>
-            {cart.length > 0 && (
-              <button onClick={clearCart} title="Clear bill" className="text-slate-500 hover:text-red-400 transition-colors">
-                <ListRestart size={18} />
-              </button>
-            )}
-          </div>
-
-          {/* Cart lines */}
-          <div className="flex-1 overflow-y-auto min-h-[120px]">
-            {cart.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-2 px-6 text-center">
-                <p className="text-sm">Nothing added yet. Scan or tap a product to start this sale.</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-slate-800">
-                {cart.map((item) => (
-                  <div key={item.id} className="px-5 py-3 flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      {item.itemId === null ? (
-                        <input
-                          ref={(el) => { if (el) nameInputRefs.current.set(item.id, el); else nameInputRefs.current.delete(item.id); }}
-                          type="text"
-                          value={item.name}
-                          onChange={(e) => updateName(item.id, e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') { e.preventDefault(); focusAndSelect(priceInputRefs, item.id); }
-                          }}
-                          className="w-full h-7 bg-slate-800 border border-slate-600 rounded-lg text-sm px-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
-                          placeholder="Custom item name..."
-                        />
-                      ) : (
-                        <p className="text-sm font-medium truncate">{item.name}</p>
-                      )}
-                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                        <span className="text-[11px] text-slate-500">Sale Rs.</span>
-                        <input
-                          ref={(el) => { if (el) priceInputRefs.current.set(item.id, el); else priceInputRefs.current.delete(item.id); }}
-                          type="number"
-                          min="0"
-                          value={item.price}
-                          onChange={(e) => updatePrice(item.id, Number(e.target.value))}
-                          onFocus={(e) => e.target.select()}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              focusAndSelect(item.itemId === null ? costInputRefs : qtyInputRefs, item.id);
-                            }
-                          }}
-                          className="w-16 h-6 bg-slate-800 border border-slate-700 rounded text-xs px-1.5 text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        />
-                        {item.itemId === null && (
-                          <>
-                            <span className="text-[11px] text-slate-500">Cost Rs.</span>
-                            <input
-                              ref={(el) => { if (el) costInputRefs.current.set(item.id, el); else costInputRefs.current.delete(item.id); }}
-                              type="number"
-                              min="0"
-                              value={item.cost}
-                              onChange={(e) => updateCost(item.id, Number(e.target.value))}
-                              onFocus={(e) => e.target.select()}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') { e.preventDefault(); focusAndSelect(qtyInputRefs, item.id); }
-                              }}
-                              title="What this item cost you — used for profit reports"
-                              className="w-16 h-6 bg-slate-800 border border-amber-700/60 rounded text-xs px-1.5 text-amber-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                            />
-                          </>
-                        )}
-                        <span className="text-[11px] text-slate-500">× {item.quantity}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 bg-slate-800 rounded-lg px-1 py-1">
-                      <button onClick={() => incrementQty(item.id, -1)} className="w-7 h-7 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700 rounded-md"><Minus size={14} /></button>
-                      <input
-                        ref={(el) => { if (el) qtyInputRefs.current.set(item.id, el); else qtyInputRefs.current.delete(item.id); }}
-                        type="number"
-                        min="0"
-                        value={item.quantity}
-                        onChange={(e) => updateQty(item.id, Number(e.target.value))}
-                        onFocus={(e) => e.target.select()}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); searchRef.current?.focus(); }
-                        }}
-                        className="w-10 h-7 text-center text-sm font-bold bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-500 rounded"
-                      />
-                      <button onClick={() => incrementQty(item.id, 1)} className="w-7 h-7 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700 rounded-md"><Plus size={14} /></button>
-                    </div>
-                    <div className="w-20 text-right font-bold text-sm">{formatCurrency(item.total)}</div>
-                    <button onClick={() => removeItem(item.id)} className="text-slate-600 hover:text-red-400 transition-colors">
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+        {/* RIGHT: CHECKOUT */}
+        <div style={{ width: cartWidth }} className="flex-shrink-0 bg-slate-900 text-white flex flex-col overflow-y-auto">
+          <div className="p-5 border-b border-slate-700">
+            <h2 className="text-lg font-bold">Checkout</h2>
+            <p className="text-slate-400 text-xs mt-0.5">{cart.length} item{cart.length !== 1 ? 's' : ''} · {formatCurrency(subtotal())}</p>
           </div>
 
           {/* Payment Type */}
@@ -726,54 +747,63 @@ export default function BillingPage() {
             </div>
           )}
 
-          {/* Customer Search (Udhaar mode) */}
-          {showCustomerSearch && (
-            <div className="p-4 border-t border-slate-700">
-              <p className="text-xs font-semibold text-slate-400 mb-2 uppercase">Customer</p>
-              {selectedCustomer ? (
-                <div className="bg-slate-800 rounded-xl p-3 flex justify-between items-center">
-                  <div>
-                    <p className="font-semibold">{selectedCustomer.name}</p>
-                    <p className="text-xs text-slate-400">{selectedCustomer.phone}</p>
-                  </div>
-                  <button onClick={() => { setCustomer(null); setCustomerSearch(''); }} className="text-slate-400 hover:text-white">✕</button>
+          {/* Customer — always available, regardless of payment type. Required only for Udhaar. */}
+          <div className="p-4 border-t border-slate-700">
+            <p className="text-xs font-semibold text-slate-400 mb-2 uppercase">
+              Customer {paymentType !== 'UDHAAR' && <span className="normal-case font-normal text-slate-500">(optional — defaults to Walk-in)</span>}
+            </p>
+            {selectedCustomer ? (
+              <div className="bg-slate-800 rounded-xl p-3 flex justify-between items-center">
+                <div>
+                  <p className="font-semibold">{selectedCustomer.name}</p>
+                  {selectedCustomer.phone && <p className="text-xs text-slate-400">{selectedCustomer.phone}</p>}
                 </div>
-              ) : (
-                <div className="relative">
+                <button onClick={() => { setCustomer(null); setCustomerSearch(''); setCustomerPhone(''); }} className="text-slate-400 hover:text-white">✕</button>
+              </div>
+            ) : (
+              <div className="relative space-y-2">
+                <input
+                  ref={customerSearchRef}
+                  type="text"
+                  value={customerSearch}
+                  onChange={(e) => setCustomerSearch(e.target.value)}
+                  placeholder="Customer name... (F6)"
+                  className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 text-white placeholder-slate-500"
+                />
+                {customerSearch && customerSuggestions.length === 0 && (
                   <input
-                    ref={customerSearchRef}
-                    type="text"
-                    value={customerSearch}
-                    onChange={(e) => setCustomerSearch(e.target.value)}
-                    placeholder="Search customer... (F6)"
-                    className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 text-white placeholder-slate-500"
+                    type="tel"
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    placeholder="Contact number (optional)"
+                    className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 text-white placeholder-slate-500"
                   />
-                  {customerSuggestions.length > 0 && (
-                    <div className="absolute bottom-full left-0 right-0 z-50 mb-1 bg-slate-800 border border-slate-600 rounded-xl shadow-xl max-h-40 overflow-y-auto">
-                      {customerSuggestions.map((c) => (
-                        <button
-                          key={c.id}
-                          onMouseDown={() => { setCustomer(c); setCustomerSearch(c.name); setCustomerSuggestions([]); }}
-                          className="w-full text-left px-4 py-2.5 hover:bg-slate-700 border-b border-slate-700 last:border-0"
-                        >
-                          <p className="font-semibold text-sm">{c.name}</p>
-                          <p className="text-xs text-orange-400">Balance: {formatCurrency(c.balance)}</p>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {customerSearch && customerSuggestions.length === 0 && (
-                    <button
-                      onMouseDown={createCustomer}
-                      className="mt-2 w-full flex items-center gap-2 text-sm text-green-400 hover:text-green-300"
-                    >
-                      <UserPlus size={14} /> Create "{customerSearch}" as new customer
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+                )}
+                {customerSuggestions.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-slate-800 border border-slate-600 rounded-xl shadow-xl max-h-40 overflow-y-auto">
+                    {customerSuggestions.map((c) => (
+                      <button
+                        key={c.id}
+                        onMouseDown={() => { setCustomer(c); setCustomerSearch(c.name); setCustomerSuggestions([]); }}
+                        className="w-full text-left px-4 py-2.5 hover:bg-slate-700 border-b border-slate-700 last:border-0"
+                      >
+                        <p className="font-semibold text-sm">{c.name}</p>
+                        <p className="text-xs text-orange-400">Balance: {formatCurrency(c.balance)}</p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {customerSearch && customerSuggestions.length === 0 && (
+                  <button
+                    onMouseDown={createCustomer}
+                    className="w-full flex items-center gap-2 text-sm text-green-400 hover:text-green-300"
+                  >
+                    <UserPlus size={14} /> Save "{customerSearch}" as new customer
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Totals */}
           <div className="p-5 flex flex-col gap-2.5 border-t border-slate-700">
