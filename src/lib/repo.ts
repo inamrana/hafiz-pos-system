@@ -1,5 +1,5 @@
 import { currentDb, runInTransaction } from './tenant-context';
-import { generateBillNumber, generatePurchaseNumber, generateReturnNumber } from './utils';
+import { generateBillNumber, generatePurchaseNumber, generateReturnNumber, shopNowParts, shopMidnightUtc, SHOP_TZ_SHIFT_SQL } from './utils';
 import type {
   Item, Customer, CustomerLedgerEntry, Bill, BillItem, Supplier, Purchase, PurchaseItem,
 } from './models';
@@ -462,7 +462,7 @@ export const reportsRepo = {
                    FROM bill_items bi LEFT JOIN items i ON i.id = bi.item_id
                   WHERE bi.bill_id = b.id) AS cost
            FROM bills b
-          WHERE date(b.created_at) = date(?) AND b.status != 'RETURNED'
+          WHERE date(datetime(b.created_at, ${SHOP_TZ_SHIFT_SQL})) = date(?) AND b.status != 'RETURNED'
           ORDER BY b.created_at ASC`
       )
       .all(date);
@@ -478,14 +478,12 @@ export const reportsRepo = {
   /** Sales/cost/profit grouped by month for the last `months` months (default 12), oldest first. */
   async monthly(months = 12) {
     const db = await currentDb();
-    const start = new Date();
-    start.setMonth(start.getMonth() - (months - 1));
-    start.setDate(1);
-    start.setHours(0, 0, 0, 0);
+    const today = shopNowParts();
+    const start = shopMidnightUtc({ year: today.year, month: today.month - (months - 1), day: 1 });
 
     const salesRows = await db
       .prepare<{ month: string; count: number; total: number }>(
-        `SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS count, COALESCE(SUM(total), 0) AS total
+        `SELECT strftime('%Y-%m', datetime(created_at, ${SHOP_TZ_SHIFT_SQL})) AS month, COUNT(*) AS count, COALESCE(SUM(total), 0) AS total
            FROM bills WHERE status != 'RETURNED' AND created_at >= ?
           GROUP BY month`
       )
@@ -493,7 +491,7 @@ export const reportsRepo = {
 
     const costRows = await db
       .prepare<{ month: string; cost: number }>(
-        `SELECT strftime('%Y-%m', b.created_at) AS month, COALESCE(SUM(bi.quantity * COALESCE(bi.cost_price, i.cost_price, 0)), 0) AS cost
+        `SELECT strftime('%Y-%m', datetime(b.created_at, ${SHOP_TZ_SHIFT_SQL})) AS month, COALESCE(SUM(bi.quantity * COALESCE(bi.cost_price, i.cost_price, 0)), 0) AS cost
            FROM bill_items bi JOIN bills b ON b.id = bi.bill_id LEFT JOIN items i ON i.id = bi.item_id
           WHERE b.status != 'RETURNED' AND b.created_at >= ?
           GROUP BY month`
@@ -505,15 +503,15 @@ export const reportsRepo = {
 
     const rows = [];
     for (let i = 0; i < months; i++) {
-      const d = new Date(start);
-      d.setMonth(d.getMonth() + i);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      // Date.UTC normalizes an out-of-range month itself, so this correctly carries the year.
+      const cursor = new Date(Date.UTC(today.year, today.month - 1 - (months - 1) + i, 1));
+      const key = `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`;
       const sales = salesMap.get(key);
       const total = sales?.total || 0;
       const cost = costMap.get(key) || 0;
       rows.push({
         month: key,
-        label: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+        label: cursor.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' }),
         count: sales?.count || 0,
         total,
         cost,
@@ -530,12 +528,12 @@ export const reportsRepo = {
   /** Sales/cost/profit grouped by year for the last `years` years (default 5), oldest first. */
   async yearly(years = 5) {
     const db = await currentDb();
-    const startYear = new Date().getFullYear() - (years - 1);
-    const start = new Date(startYear, 0, 1);
+    const startYear = shopNowParts().year - (years - 1);
+    const start = shopMidnightUtc({ year: startYear, month: 1, day: 1 });
 
     const salesRows = await db
       .prepare<{ year: string; count: number; total: number }>(
-        `SELECT strftime('%Y', created_at) AS year, COUNT(*) AS count, COALESCE(SUM(total), 0) AS total
+        `SELECT strftime('%Y', datetime(created_at, ${SHOP_TZ_SHIFT_SQL})) AS year, COUNT(*) AS count, COALESCE(SUM(total), 0) AS total
            FROM bills WHERE status != 'RETURNED' AND created_at >= ?
           GROUP BY year`
       )
@@ -543,7 +541,7 @@ export const reportsRepo = {
 
     const costRows = await db
       .prepare<{ year: string; cost: number }>(
-        `SELECT strftime('%Y', b.created_at) AS year, COALESCE(SUM(bi.quantity * COALESCE(bi.cost_price, i.cost_price, 0)), 0) AS cost
+        `SELECT strftime('%Y', datetime(b.created_at, ${SHOP_TZ_SHIFT_SQL})) AS year, COALESCE(SUM(bi.quantity * COALESCE(bi.cost_price, i.cost_price, 0)), 0) AS cost
            FROM bill_items bi JOIN bills b ON b.id = bi.bill_id LEFT JOIN items i ON i.id = bi.item_id
           WHERE b.status != 'RETURNED' AND b.created_at >= ?
           GROUP BY year`

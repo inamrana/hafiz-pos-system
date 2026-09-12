@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Search, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, parseServerDate } from '@/lib/utils';
 
 interface LedgerEntry { amount: number; type: string; date: string; notes: string; }
 interface Customer { id: number; name: string; phone: string; balance: number; ledger: LedgerEntry[]; }
@@ -96,7 +96,7 @@ export default function UdhaarPage() {
                       </div>
                       <div className="text-right">
                         <span className={`font-bold ${e.type === 'CREDIT' ? 'text-red-600' : 'text-green-600'}`}>{e.type === 'CREDIT' ? '+' : '-'}{formatCurrency(e.amount)}</span>
-                        <p className="text-xs text-slate-400">{new Date(e.date).toLocaleDateString()}</p>
+                        <p className="text-xs text-slate-400">{parseServerDate(e.date).toLocaleDateString()}</p>
                       </div>
                     </div>
                   ))}

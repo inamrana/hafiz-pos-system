@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { CalendarDays, Printer, Receipt, X } from 'lucide-react';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, parseServerDate, localDateInput } from '@/lib/utils';
 
 interface DailyBill {
   id: number;
@@ -51,7 +51,7 @@ interface BillDetail {
 }
 
 export default function DailyReportPage() {
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => localDateInput());
   const [data, setData] = useState<DailyData | null>(null);
   const [loading, setLoading] = useState(false);
   const [shop, setShop] = useState({ shopName: 'Mart POS' });
@@ -118,7 +118,7 @@ export default function DailyReportPage() {
           <input
             type="date"
             value={date}
-            max={new Date().toISOString().slice(0, 10)}
+            max={localDateInput()}
             onChange={(e) => setDate(e.target.value)}
             className="border border-slate-200 bg-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
@@ -172,7 +172,7 @@ export default function DailyReportPage() {
                     className="border-b border-slate-100 hover:bg-blue-50 text-sm cursor-pointer transition-colors"
                   >
                     <td className="px-5 py-3 font-semibold text-blue-600">{b.bill_number}</td>
-                    <td className="px-5 py-3 text-slate-500">{new Date(b.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                    <td className="px-5 py-3 text-slate-500">{parseServerDate(b.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
                     <td className="px-5 py-3 text-slate-700">{b.customer_name}</td>
                     <td className="px-5 py-3 text-center text-slate-500">{b.item_count}</td>
                     <td className="px-5 py-3 text-right font-bold text-slate-800">{formatCurrency(b.total)}</td>
@@ -200,7 +200,7 @@ export default function DailyReportPage() {
                 <div className="flex items-center justify-between p-6 border-b border-slate-200">
                   <div>
                     <h2 className="text-lg font-bold text-slate-800">{selectedBill.bill_number}</h2>
-                    <p className="text-xs text-slate-400">{new Date(selectedBill.created_at).toLocaleString()}</p>
+                    <p className="text-xs text-slate-400">{parseServerDate(selectedBill.created_at).toLocaleString()}</p>
                   </div>
                   <button onClick={closeBillDetail}><X size={20} className="text-slate-400" /></button>
                 </div>

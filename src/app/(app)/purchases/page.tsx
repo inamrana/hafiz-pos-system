@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Plus, Trash2, Truck, UserPlus } from 'lucide-react';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, parseServerDate } from '@/lib/utils';
 
 interface Item { id: number; name: string; category: string; cost_price: number; sale_price: number; unit: string; }
 interface Supplier { id: number; name: string; phone: string; balance: number; }
@@ -250,7 +250,7 @@ export default function PurchasesPage() {
                 <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
                   <td className="px-5 py-3 font-semibold text-blue-600">{p.purchase_number}</td>
                   <td className="px-5 py-3">{p.supplier_name}</td>
-                  <td className="px-5 py-3 text-slate-500">{new Date(p.created_at).toLocaleDateString()}</td>
+                  <td className="px-5 py-3 text-slate-500">{parseServerDate(p.created_at).toLocaleDateString()}</td>
                   <td className="px-5 py-3">
                     <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${p.payment_type === 'CASH' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{p.payment_type}</span>
                   </td>

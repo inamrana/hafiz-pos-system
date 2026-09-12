@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Search, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, parseServerDate } from '@/lib/utils';
 
 interface LedgerEntry { id: number; amount: number; type: 'PURCHASE' | 'PAYMENT'; date: string; notes: string; }
 interface Supplier { id: number; name: string; phone: string; address: string; balance: number; }
@@ -126,7 +126,7 @@ export default function SuppliersPage() {
                         </div>
                         <div className="text-right">
                           <span className={`font-bold ${e.type === 'PURCHASE' ? 'text-red-600' : 'text-green-600'}`}>{e.type === 'PURCHASE' ? '+' : '-'}{formatCurrency(e.amount)}</span>
-                          <p className="text-xs text-slate-400">{new Date(e.date).toLocaleDateString()}</p>
+                          <p className="text-xs text-slate-400">{parseServerDate(e.date).toLocaleDateString()}</p>
                         </div>
                       </div>
                     ))}

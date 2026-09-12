@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Printer, ArrowUpRight, ArrowDownRight, Download, Undo2, X, Eye } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, parseServerDate } from '@/lib/utils';
 
 interface BillItem {
   id: number;
@@ -112,7 +112,7 @@ export default function ReportsPage() {
 
   const exportExcel = () => {
     const rows = filteredBills.map((b) => ({
-      Invoice: b.bill_number, Customer: b.customer_name, Date: new Date(b.created_at).toLocaleString(),
+      Invoice: b.bill_number, Customer: b.customer_name, Date: parseServerDate(b.created_at).toLocaleString(),
       Type: b.payment_type, Status: b.status, Subtotal: b.subtotal, Discount: b.discount, Total: b.total,
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -173,7 +173,7 @@ export default function ReportsPage() {
             {shop.phone && <p>{shop.phone}</p>}
             <p className="mt-1 font-bold">SALES RECEIPT (REPRINT)</p>
             <p>Bill #: {printBill.bill_number}</p>
-            <p>{new Date(printBill.created_at).toLocaleString()}</p>
+            <p>{parseServerDate(printBill.created_at).toLocaleString()}</p>
           </div>
           <table className="w-full">
             <thead><tr className="border-b border-dashed border-black"><th className="text-left">Item</th><th className="text-center">Qty</th><th className="text-right">Price</th><th className="text-right">Total</th></tr></thead>
@@ -290,7 +290,7 @@ export default function ReportsPage() {
                     <tr key={b.id} className="border-b border-slate-100 hover:bg-slate-50 text-sm transition-colors">
                       <td className="px-5 py-3.5 font-semibold text-blue-600">{b.bill_number}</td>
                       <td className="px-5 py-3.5 text-slate-700">{b.customer_name}</td>
-                      <td className="px-5 py-3.5 text-slate-500">{new Date(b.created_at).toLocaleDateString()}</td>
+                      <td className="px-5 py-3.5 text-slate-500">{parseServerDate(b.created_at).toLocaleDateString()}</td>
                       <td className="px-5 py-3.5">
                         <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${b.payment_type === 'CASH' ? 'bg-green-100 text-green-700' : b.payment_type === 'CARD' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>{b.payment_type}</span>
                       </td>

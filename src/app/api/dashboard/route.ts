@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { currentDb } from '@/lib/tenant-context';
 import { itemsRepo, settingsRepo } from '@/lib/repo';
 import { withAuth } from '@/lib/api-auth';
+import { shopNowParts, shopMidnightUtc, SHOP_TZ_SHIFT_SQL } from '@/lib/utils';
 
 export async function GET(req: NextRequest) {
   return withAuth(req, async () => {
@@ -9,10 +10,10 @@ export async function GET(req: NextRequest) {
     const settings = await settingsRepo.getAll();
     const nearExpiryDays = Number(settings.nearExpiryDays || 30);
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
-    const yearStart = new Date(todayStart.getFullYear(), 0, 1);
+    const today = shopNowParts();
+    const todayStart = shopMidnightUtc(today);
+    const monthStart = shopMidnightUtc({ ...today, day: 1 });
+    const yearStart = shopMidnightUtc({ year: today.year, month: 1, day: 1 });
 
     const todaySales = (await db
       .prepare<{ total: number; count: number }>(
@@ -37,15 +38,13 @@ export async function GET(req: NextRequest) {
     const lowStockItems = await itemsRepo.lowStock();
     const expiringBatches = await itemsRepo.expiringBatches(nearExpiryDays);
 
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-    sevenDaysAgo.setHours(0, 0, 0, 0);
+    const sevenDaysAgo = new Date(todayStart.getTime() - 6 * 86400000);
 
     const dailyChart = await db
       .prepare(
-        `SELECT date(created_at) AS _id, COALESCE(SUM(total),0) AS total, COUNT(*) AS count
+        `SELECT date(datetime(created_at, ${SHOP_TZ_SHIFT_SQL})) AS _id, COALESCE(SUM(total),0) AS total, COUNT(*) AS count
          FROM bills WHERE created_at >= ? AND status != 'RETURNED'
-         GROUP BY date(created_at) ORDER BY _id ASC`
+         GROUP BY date(datetime(created_at, ${SHOP_TZ_SHIFT_SQL})) ORDER BY _id ASC`
       )
       .all(sevenDaysAgo.toISOString());
 
