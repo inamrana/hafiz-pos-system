@@ -675,6 +675,47 @@ export const reportsRepo = {
 
     return { ...bill, items, totalCost, profit: bill.total - totalCost };
   },
+
+  /**
+   * Every line item sold on a given calendar day (YYYY-MM-DD), tagged with which
+   * bill/customer it belongs to — lets the UI group items bought together in the
+   * same sale rather than just listing products in isolation.
+   */
+  async soldToday(date: string) {
+    const db = await currentDb();
+    const rows = await db
+      .prepare<{
+        bill_id: number; bill_number: string; customer_name: string; created_at: string;
+        bill_item_id: number; item_id: number | null; name: string; quantity: number;
+        price: number; total: number; cost_price: number;
+      }>(
+        `SELECT b.id AS bill_id, b.bill_number, b.customer_name, b.created_at,
+                bi.id AS bill_item_id, bi.item_id, bi.name, bi.quantity, bi.price, bi.total,
+                COALESCE(bi.cost_price, i.cost_price, 0) AS cost_price
+           FROM bill_items bi
+           JOIN bills b ON b.id = bi.bill_id
+           LEFT JOIN items i ON i.id = bi.item_id
+          WHERE date(datetime(b.created_at, ${SHOP_TZ_SHIFT_SQL})) = date(?) AND b.status != 'RETURNED'
+          ORDER BY b.created_at ASC, bi.id ASC`
+      )
+      .all(date);
+
+    const items = rows.map((r) => {
+      const cost = r.quantity * r.cost_price;
+      return { ...r, cost, profit: r.total - cost };
+    });
+
+    const uniqueProducts = new Set(items.map((i) => i.item_id ?? `custom:${i.name}`)).size;
+    const totalQuantity = items.reduce((s, i) => s + i.quantity, 0);
+    const totalRevenue = items.reduce((s, i) => s + i.total, 0);
+    const totalCost = items.reduce((s, i) => s + i.cost, 0);
+    const billCount = new Set(items.map((i) => i.bill_id)).size;
+
+    return {
+      items,
+      totals: { uniqueProducts, totalQuantity, totalRevenue, totalCost, totalProfit: totalRevenue - totalCost, billCount },
+    };
+  },
 };
 
 export { nowIso };

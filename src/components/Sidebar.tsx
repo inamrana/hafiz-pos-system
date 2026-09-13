@@ -20,12 +20,14 @@ import {
   TrendingUp,
   Boxes,
   BarChart3,
+  PackageCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const mainItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/billing', label: 'Billing', icon: ShoppingCart },
+  { href: '/sold-today', label: 'Sold Today', icon: PackageCheck },
   { href: '/stock', label: 'Stock', icon: Package },
   { href: '/stock?filter=low', label: 'Low Stock', icon: AlertTriangle },
   { href: '/purchases', label: 'Purchases', icon: Truck },
