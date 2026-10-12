@@ -147,7 +147,53 @@ CREATE TABLE IF NOT EXISTS return_items (
   price REAL NOT NULL,
   total REAL NOT NULL
 );
+
+/** Only manual changes live here (corrections, edits, deletes, merges, imports,
+ *  deleted expenses). Sales, purchases and returns are NOT copied in — they're read
+ *  straight from their own tables, so nothing is stored twice. */
+CREATE TABLE IF NOT EXISTS activity_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  item_id INTEGER,
+  item_name TEXT,
+  qty_change REAL,
+  qty_before REAL,
+  qty_after REAL,
+  amount REAL,
+  reference TEXT DEFAULT '',
+  reason TEXT DEFAULT '',
+  details TEXT DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_activity_item ON activity_log(item_id);
+
+CREATE TABLE IF NOT EXISTS expenses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category TEXT NOT NULL DEFAULT 'Other',
+  description TEXT DEFAULT '',
+  amount REAL NOT NULL,
+  payment_method TEXT NOT NULL DEFAULT 'CASH',
+  expense_date TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+
+-- Lookups by product (item history, merge, delete checks) and by return.
+CREATE INDEX IF NOT EXISTS idx_bill_items_item ON bill_items(item_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_items_item ON purchase_items(item_id);
+CREATE INDEX IF NOT EXISTS idx_return_items_item ON return_items(item_id);
+CREATE INDEX IF NOT EXISTS idx_return_items_return ON return_items(return_id);
+CREATE INDEX IF NOT EXISTS idx_returns_created ON returns(created_at);
+CREATE INDEX IF NOT EXISTS idx_returns_bill ON returns(bill_id);
 `;
+
+/**
+ * Bump when the schema changes. The version is stored in the settings table, so a
+ * cold start costs ONE small query once the database is up to date — instead of
+ * re-running every CREATE/ALTER statement on every serverless cold start.
+ */
+const SCHEMA_VERSION = 2;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -172,30 +218,83 @@ function getRawClient(): Client {
   return global.__libsqlClient;
 }
 
+/** Same rule as normalizeItemName in repo.ts — the duplicate-detection key stored in items.name_key. */
+function nameKey(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 /**
- * Adds columns that were introduced after this table's original CREATE TABLE,
- * for databases created before the column existed. CREATE TABLE IF NOT EXISTS
- * doesn't touch existing tables, so new columns need an explicit, idempotent
- * ALTER TABLE — checked against PRAGMA table_info so re-running it (every
- * server start) is a no-op once the column is there.
+ * Adds a column introduced after the table's original CREATE TABLE. Tolerates a
+ * concurrent cold start having just added it (two serverless instances migrating
+ * at once).
  */
 async function addColumnIfMissing(client: Client, table: string, column: string, ddl: string) {
   const info = await client.execute(`PRAGMA table_info(${table})`);
-  const exists = info.rows.some((r) => (r as unknown as { name: string }).name === column);
-  if (!exists) await client.execute(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  if (info.rows.some((r) => (r as unknown as { name: string }).name === column)) return;
+  try {
+    await client.execute(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  } catch (e) {
+    if (!(e instanceof Error && /duplicate column/i.test(e.message))) throw e;
+  }
 }
 
-/** Runs schema migrations exactly once per process, lazily on first real use. */
+async function currentSchemaVersion(client: Client): Promise<number> {
+  try {
+    const r = await client.execute("SELECT value FROM settings WHERE key = 'schema_version'");
+    return Number((r.rows[0] as unknown as { value?: string } | undefined)?.value || 0);
+  } catch {
+    return 0; // brand-new database: no settings table yet
+  }
+}
+
+async function migrate(client: Client) {
+  // Every statement is idempotent (IF NOT EXISTS), so re-running after an
+  // interrupted migration is safe. Sent as one request.
+  await client.executeMultiple(SCHEMA_SQL);
+
+  await addColumnIfMissing(client, 'bill_items', 'cost_price', 'cost_price REAL');
+  await addColumnIfMissing(client, 'items', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing(client, 'items', 'name_key', "name_key TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(client, 'bills', 'client_ref', 'client_ref TEXT');
+  await addColumnIfMissing(client, 'purchases', 'notes', "notes TEXT DEFAULT ''");
+
+  // Fill name_key for existing items so duplicate checks are an index lookup
+  // instead of reading the whole items table.
+  const missing = await client.execute("SELECT id, name FROM items WHERE name_key = ''");
+  const updates = missing.rows.map((r) => {
+    const row = r as unknown as { id: number; name: string };
+    return { sql: 'UPDATE items SET name_key = ? WHERE id = ?', args: [nameKey(row.name), row.id] };
+  });
+
+  await client.batch(
+    [
+      ...updates,
+      'CREATE INDEX IF NOT EXISTS idx_items_name_key ON items(name_key)',
+      // A checkout retried by a double key press / flaky network is recognised as
+      // the same sale instead of deducting stock twice. NULLs don't collide.
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_bills_client_ref ON bills(client_ref)',
+      // Item history shows exact running stock only from this moment on.
+      "INSERT OR IGNORE INTO settings (key, value) VALUES ('history_started', datetime('now'))",
+      {
+        sql: "INSERT INTO settings (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        args: [String(SCHEMA_VERSION)],
+      },
+    ],
+    'write'
+  );
+}
+
+/** Brings the schema up to date once per process, lazily on first real use. */
 export function ready(): Promise<void> {
   if (!global.__libsqlReady) {
     global.__libsqlReady = (async () => {
       const client = getRawClient();
-      const statements = SCHEMA_SQL.split(';').map((s) => s.trim()).filter(Boolean);
-      for (const sql of statements) {
-        await client.execute(sql);
-      }
-      await addColumnIfMissing(client, 'bill_items', 'cost_price', 'cost_price REAL');
-    })();
+      if ((await currentSchemaVersion(client)) < SCHEMA_VERSION) await migrate(client);
+    })().catch((e) => {
+      // Don't cache a failed migration forever — let the next request retry.
+      global.__libsqlReady = undefined;
+      throw e;
+    });
   }
   return global.__libsqlReady;
 }

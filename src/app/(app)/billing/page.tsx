@@ -82,10 +82,21 @@ export default function BillingPage() {
   } = useBillingStore();
 
   const [processing, setProcessing] = useState(false);
+  // State updates land a render later, so two quick F9 presses (or a held-down key
+  // repeating) could both see processing === false and submit the sale twice —
+  // deducting stock twice. A ref flips synchronously; the per-sale reference lets
+  // the server drop a repeat of the same sale even if one slips through.
+  const checkoutInFlight = useRef(false);
+  const saleRef = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const [lastBill, setLastBill] = useState<string | null>(null);
   const [lastPaymentSummary, setLastPaymentSummary] = useState<{ paymentType: string; tendered: number; change: number } | null>(null);
   const [error, setError] = useState('');
   const total = grandTotal();
+
+  // A changed cart is a different sale — a retry of it must not be mistaken for the old one.
+  useEffect(() => {
+    saleRef.current = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }, [cart, discount, paymentType, selectedCustomer]);
 
   const loadItems = useCallback(async () => {
     const res = await fetch('/api/items?q=');
@@ -208,7 +219,7 @@ export default function BillingPage() {
 
   // ── Checkout ─────────────────────────────────────────────────────────────
   const handleCheckout = useCallback(async (print: boolean, type?: 'CASH' | 'CARD' | 'UDHAAR', tenderedOverride?: number) => {
-    if (cart.length === 0 || processing) return;
+    if (cart.length === 0 || processing || checkoutInFlight.current) return;
     const effectiveType = type || paymentType;
     const effectiveTendered = tenderedOverride ?? cashTendered;
     if (effectiveType === 'UDHAAR' && !selectedCustomer) {
@@ -219,6 +230,7 @@ export default function BillingPage() {
       setError(`Cash tendered (${formatCurrency(effectiveTendered)}) is less than the total (${formatCurrency(total)}).`);
       return;
     }
+    checkoutInFlight.current = true;
     setProcessing(true);
     setError('');
     try {
@@ -236,6 +248,7 @@ export default function BillingPage() {
           paymentType: effectiveType,
           customerId: selectedCustomer?.id || null,
           customerName: selectedCustomer?.name || 'Walk-in Customer',
+          clientRef: saleRef.current,
         }),
       });
       if (!res.ok) {
@@ -256,6 +269,7 @@ export default function BillingPage() {
       loadItems();
       searchRef.current?.focus();
     } finally {
+      checkoutInFlight.current = false;
       setProcessing(false);
     }
   }, [cart, discount, paymentType, selectedCustomer, cashTendered, total, processing, clearCart, loadItems]);
@@ -351,8 +365,8 @@ export default function BillingPage() {
       else if (e.key === 'F6') { e.preventDefault(); customerSearchRef.current?.focus(); }
       else if (e.key === 'F7') { e.preventDefault(); discountRef.current?.focus(); discountRef.current?.select(); }
       else if (e.key === 'F8') { e.preventDefault(); if (cart.length > 0 && confirm('Void the entire current order?')) { clearCart(); setTenderedTouched(false); } }
-      else if (e.key === 'F9') { e.preventDefault(); handleCheckout(true); }
-      else if (e.key === 'F10') { e.preventDefault(); handleCheckout(false); }
+      else if (e.key === 'F9') { e.preventDefault(); if (!e.repeat) handleCheckout(true); }
+      else if (e.key === 'F10') { e.preventDefault(); if (!e.repeat) handleCheckout(false); }
       else if (e.altKey && e.key.toLowerCase() === 'c') { e.preventDefault(); addCustomItem(); }
       else if ((e.key === '/' || e.key === ' ') && !typingInField) { e.preventDefault(); searchRef.current?.focus(); }
       else if (e.key === 'Escape') { setShowDropdown(false); setShowHeld(false); }

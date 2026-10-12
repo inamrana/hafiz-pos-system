@@ -9,6 +9,9 @@ export interface Item {
   unit: string;
   unit_type: 'COUNT' | 'WEIGHT';
   low_stock_threshold: number;
+  archived: number;
+  /** Lower-case name with spaces/punctuation removed — duplicate detection key. */
+  name_key: string;
   created_at: string;
   updated_at: string;
 }
@@ -50,6 +53,7 @@ export interface Purchase {
   payment_type: 'CASH' | 'CREDIT';
   subtotal: number;
   total: number;
+  notes: string;
   created_at: string;
   items?: PurchaseItem[];
 }
@@ -117,5 +121,36 @@ export interface ReturnRecord {
   refund_amount: number;
   refund_method: 'CASH' | 'UDHAAR_ADJUST';
   notes: string;
+  created_at: string;
+}
+
+export type ActivityAction =
+  | 'SALE' | 'RETURN' | 'PURCHASE' | 'ADJUST' | 'OPENING'
+  | 'ITEM_CREATE' | 'ITEM_EDIT' | 'ITEM_DELETE' | 'ITEM_ARCHIVE' | 'ITEM_MERGE' | 'IMPORT'
+  | 'EXPENSE' | 'EXPENSE_DELETE';
+
+export interface ActivityEntry {
+  /** Prefixed by source: L = activity log, S = sale, P = purchase, R = return, E = expense. */
+  id: string;
+  action: ActivityAction;
+  item_id: number | null;
+  item_name: string | null;
+  qty_change: number | null;
+  qty_before: number | null;
+  qty_after: number | null;
+  amount: number | null;
+  reference: string;
+  reason: string;
+  details: string;
+  created_at: string;
+}
+
+export interface Expense {
+  id: number;
+  category: string;
+  description: string;
+  amount: number;
+  payment_method: string;
+  expense_date: string;
   created_at: string;
 }

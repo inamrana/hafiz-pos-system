@@ -1,16 +1,5 @@
-import { AsyncLocalStorage } from 'async_hooks';
-import type { Transaction, InArgs, Row } from '@libsql/client';
+import type { InArgs, Row } from '@libsql/client';
 import { getClient } from './db';
-
-interface Store {
-  tx?: Transaction;
-}
-
-const storage = new AsyncLocalStorage<Store>();
-
-interface Executor {
-  execute(stmt: { sql: string; args: InArgs }): Promise<{ rows: Row[]; rowsAffected: number; lastInsertRowid?: bigint }>;
-}
 
 interface Stmt<T> {
   all(...args: unknown[]): Promise<T[]>;
@@ -22,51 +11,63 @@ export interface Db {
   prepare<T = Record<string, unknown>>(sql: string): Stmt<T>;
 }
 
+/** One SQL statement for a batch: `sql('UPDATE items SET x = ? WHERE id = ?', x, id)`. */
+export interface Statement {
+  sql: string;
+  args: InArgs;
+}
+
+export function sql(text: string, ...args: unknown[]): Statement {
+  return { sql: text, args: args as InArgs };
+}
+
 function rowToObject(row: Row): Record<string, unknown> {
   const obj: Record<string, unknown> = {};
   for (const key of Object.keys(row)) obj[key] = (row as unknown as Record<string, unknown>)[key];
   return obj;
 }
 
-function makeStmt<T>(executor: Executor, sql: string): Stmt<T> {
+/** Handle for single read queries (and the odd standalone write). */
+export async function currentDb(): Promise<Db> {
+  const client = await getClient();
   return {
-    async all(...args: unknown[]) {
-      const r = await executor.execute({ sql, args: args as InArgs });
-      return r.rows.map(rowToObject) as T[];
-    },
-    async get(...args: unknown[]) {
-      const r = await executor.execute({ sql, args: args as InArgs });
-      return r.rows[0] ? (rowToObject(r.rows[0]) as T) : undefined;
-    },
-    async run(...args: unknown[]) {
-      const r = await executor.execute({ sql, args: args as InArgs });
-      return { lastInsertRowid: Number(r.lastInsertRowid ?? 0), changes: r.rowsAffected };
-    },
+    prepare: <T,>(text: string): Stmt<T> => ({
+      async all(...args: unknown[]) {
+        const r = await client.execute({ sql: text, args: args as InArgs });
+        return r.rows.map(rowToObject) as T[];
+      },
+      async get(...args: unknown[]) {
+        const r = await client.execute({ sql: text, args: args as InArgs });
+        return r.rows[0] ? (rowToObject(r.rows[0]) as T) : undefined;
+      },
+      async run(...args: unknown[]) {
+        const r = await client.execute({ sql: text, args: args as InArgs });
+        return { lastInsertRowid: Number(r.lastInsertRowid ?? 0), changes: r.rowsAffected };
+      },
+    }),
   };
 }
 
-/** The active db handle — uses the ambient transaction when one is open. */
-export async function currentDb(): Promise<Db> {
-  const store = storage.getStore();
-  const executor: Executor = store?.tx ?? (await getClient());
-  return { prepare: <T,>(sql: string) => makeStmt<T>(executor, sql) };
+/**
+ * Sends every statement in ONE request and applies them atomically — all or
+ * nothing. This replaces interactive transactions, which held Turso's write lock
+ * open across one network round trip per statement: a slow sale (or a serverless
+ * function cut off half-way) kept the database locked and every other write
+ * waited behind it. A batch can't be left half-open.
+ *
+ * Statements that need an id created earlier in the same batch look it up by a
+ * unique column (e.g. `(SELECT id FROM bills WHERE bill_number = ?)`).
+ */
+export async function writeBatch(statements: Statement[]) {
+  if (statements.length === 0) return [];
+  const client = await getClient();
+  return client.batch(statements, 'write');
 }
 
-/**
- * Runs `fn` inside an interactive transaction. Every currentDb() call made inside
- * fn — directly or via further nested async calls — transparently joins the same
- * transaction, so multi-statement writes (e.g. a bill plus its line items and
- * stock deductions) are atomic.
- */
-export async function runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
+/** Runs several read queries in one request; returns each query's rows. */
+export async function readBatch(statements: Statement[]): Promise<Record<string, unknown>[][]> {
+  if (statements.length === 0) return [];
   const client = await getClient();
-  const tx = await client.transaction('write');
-  try {
-    const result = await storage.run({ tx }, fn);
-    await tx.commit();
-    return result;
-  } catch (e) {
-    await tx.rollback();
-    throw e;
-  }
+  const results = await client.batch(statements, 'read');
+  return results.map((r) => r.rows.map(rowToObject));
 }

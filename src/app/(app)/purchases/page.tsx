@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Plus, Trash2, Truck, UserPlus } from 'lucide-react';
 import { formatCurrency, parseServerDate } from '@/lib/utils';
 
@@ -9,6 +10,10 @@ interface Supplier { id: number; name: string; phone: string; balance: number; }
 interface PurchaseLine { id: string; itemId: number | null; name: string; quantity: number; costPrice: number; expiryDate: string; isNew: boolean; }
 interface PurchaseRecord {
   id: number; purchase_number: string; supplier_name: string; payment_type: string; total: number; created_at: string;
+  notes?: string; item_count?: number;
+}
+interface PurchaseDetail extends PurchaseRecord {
+  items: { id: number; item_id: number | null; name: string; quantity: number; cost_price: number; expiry_date: string | null; total: number }[];
 }
 
 const newLine = (): PurchaseLine => ({ id: `${Date.now()}-${Math.random()}`, itemId: null, name: '', quantity: 1, costPrice: 0, expiryDate: '', isNew: false });
@@ -23,6 +28,17 @@ export default function PurchasesPage() {
   const [processing, setProcessing] = useState(false);
   const [recent, setRecent] = useState<PurchaseRecord[]>([]);
   const [message, setMessage] = useState('');
+  const [notes, setNotes] = useState('');
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [detail, setDetail] = useState<PurchaseDetail | null>(null);
+
+  const toggleDetail = async (id: number) => {
+    if (openId === id) { setOpenId(null); return; }
+    setOpenId(id);
+    setDetail(null);
+    const res = await fetch(`/api/purchases?id=${id}`);
+    if (res.ok) setDetail(await res.json());
+  };
 
   const loadRecent = async () => {
     const res = await fetch('/api/purchases?limit=15');
@@ -84,6 +100,7 @@ export default function PurchasesPage() {
           supplierId: selectedSupplier?.id || null,
           supplierName: selectedSupplier?.name || 'Unknown Supplier',
           paymentType,
+          notes: notes.trim(),
           items: validLines.map((l) => ({
             itemId: l.itemId,
             name: l.name.trim(),
@@ -99,10 +116,11 @@ export default function PurchasesPage() {
         return;
       }
       const purchase = await res.json();
-      setMessage(`Purchase ${purchase.purchase_number} recorded — stock updated.`);
+      setMessage(`Purchase ${purchase.purchase_number} recorded. Stock updated and ${formatCurrency(purchase.total)} added to Expenses.`);
       setLines([newLine()]);
       setSelectedSupplier(null);
       setSupplierSearch('');
+      setNotes('');
       loadRecent();
     } finally {
       setProcessing(false);
@@ -189,7 +207,7 @@ export default function PurchasesPage() {
                   </div>
                 )}
                 {line.name && !line.itemId && (itemQuery[line.id]?.length || 0) === 0 && (
-                  <p className="text-xs text-green-600 mt-1">New item — will be added to inventory</p>
+                  <p className="text-xs text-green-600 mt-1">New item, will be added to stock (if this name already exists, the existing item is used)</p>
                 )}
               </div>
               <div className="col-span-2">
@@ -209,6 +227,11 @@ export default function PurchasesPage() {
           <button onClick={addLine} className="flex items-center gap-2 text-sm font-semibold text-blue-600 hover:text-blue-700">
             <Plus size={16} /> Add Line
           </button>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-500 mb-1">Note (optional)</label>
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. supplier bill no., market trip" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
 
         <div className="flex items-center justify-between border-t border-slate-200 pt-4">
@@ -231,6 +254,7 @@ export default function PurchasesPage() {
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-200">
           <h2 className="font-bold text-slate-700">Recent Purchases</h2>
+          <p className="text-xs text-slate-400">Click a purchase to see what was bought</p>
         </div>
         <table className="w-full">
           <thead>
@@ -247,15 +271,39 @@ export default function PurchasesPage() {
               <tr><td colSpan={5} className="text-center py-8 text-slate-400 text-sm">No purchases recorded yet.</td></tr>
             ) : (
               recent.map((p) => (
-                <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50 text-sm">
-                  <td className="px-5 py-3 font-semibold text-blue-600">{p.purchase_number}</td>
-                  <td className="px-5 py-3">{p.supplier_name}</td>
+                <Fragment key={p.id}>
+                <tr onClick={() => toggleDetail(p.id)} className="border-b border-slate-100 hover:bg-slate-50 text-sm cursor-pointer">
+                  <td className="px-5 py-3 font-semibold text-blue-600">{openId === p.id ? '▾' : '▸'} {p.purchase_number}</td>
+                  <td className="px-5 py-3">{p.supplier_name}{p.item_count ? <span className="text-xs text-slate-400"> · {p.item_count} item(s)</span> : null}{p.notes ? <span className="block text-xs text-slate-400">{p.notes}</span> : null}</td>
                   <td className="px-5 py-3 text-slate-500">{parseServerDate(p.created_at).toLocaleDateString()}</td>
                   <td className="px-5 py-3">
                     <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${p.payment_type === 'CASH' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{p.payment_type}</span>
                   </td>
                   <td className="px-5 py-3 text-right font-bold">{formatCurrency(p.total)}</td>
                 </tr>
+                {openId === p.id && (
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <td colSpan={5} className="px-8 py-3">
+                      {!detail ? <p className="text-sm text-slate-400">Loading...</p> : (
+                        <table className="w-full text-sm">
+                          <thead><tr className="text-left text-xs text-slate-400"><th className="py-1">Item</th><th className="text-right">Qty</th><th className="text-right">Cost</th><th className="text-right">Expiry</th><th className="text-right">Total</th></tr></thead>
+                          <tbody>
+                            {detail.items.map((i) => (
+                              <tr key={i.id} className="border-t border-slate-200">
+                                <td className="py-1.5">{i.item_id ? <Link href={`/stock/manage?id=${i.item_id}`} className="hover:text-blue-600">{i.name}</Link> : i.name}</td>
+                                <td className="text-right">{i.quantity}</td>
+                                <td className="text-right">{formatCurrency(i.cost_price)}</td>
+                                <td className="text-right text-slate-500">{i.expiry_date || '—'}</td>
+                                <td className="text-right font-semibold">{formatCurrency(i.total)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))
             )}
           </tbody>

@@ -21,6 +21,9 @@ import {
   Boxes,
   BarChart3,
   PackageCheck,
+  SlidersHorizontal,
+  Wallet,
+  History,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -29,8 +32,10 @@ const mainItems = [
   { href: '/billing', label: 'Billing', icon: ShoppingCart },
   { href: '/sold-today', label: 'Sold Today', icon: PackageCheck },
   { href: '/stock', label: 'Stock', icon: Package },
+  { href: '/stock/manage', label: 'Manage Stock', icon: SlidersHorizontal },
   { href: '/stock?filter=low', label: 'Low Stock', icon: AlertTriangle },
   { href: '/purchases', label: 'Purchases', icon: Truck },
+  { href: '/expenses', label: 'Expenses', icon: Wallet },
   { href: '/suppliers', label: 'Suppliers', icon: Building2 },
   { href: '/udhaar', label: 'Udhaar Khaata', icon: BookOpen },
   { href: '/reports', label: 'Bills', icon: Receipt },
@@ -42,6 +47,7 @@ const reportItems = [
   { href: '/reports/yearly', label: 'Yearly Report', icon: TrendingUp },
   { href: '/reports/inventory', label: 'Inventory Report', icon: Boxes },
   { href: '/reports/products', label: 'Product Report', icon: BarChart3 },
+  { href: '/activity', label: 'Activity Log', icon: History },
 ];
 
 const bottomItems = [
@@ -75,7 +81,10 @@ export default function Sidebar({ shopName }: { shopName: string }) {
     });
   };
 
-  const isActive = (href: string) => (currentUrl ? currentUrl === href : pathname === href);
+  // Exact URL match keeps "Stock" and "Low Stock" (?filter=low) apart; otherwise a
+  // page with its own query string (e.g. /stock/manage?id=5) still highlights.
+  const isActive = (href: string) =>
+    currentUrl ? currentUrl === href || (pathname === href && !currentUrl.includes('filter=')) : pathname === href;
 
   const renderLink = ({ href, label, icon: Icon }: { href: string; label: string; icon: typeof LayoutDashboard }) => (
     <Link

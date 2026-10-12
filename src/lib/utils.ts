@@ -51,6 +51,35 @@ export function shopMidnightUtc(parts: { year: number; month: number; day: numbe
 }
 
 /**
+ * A UTC instant in SQLite's own timestamp format ("YYYY-MM-DD HH:MM:SS") — the
+ * format datetime('now') stores in created_at. Comparing created_at against an ISO
+ * string ("...T...Z") goes wrong on the same date, because ' ' sorts before 'T'.
+ */
+export function toSqlTimestamp(d: Date): string {
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/** Normalises a client-sent ISO timestamp to toSqlTimestamp form (unparseable input passes through). */
+export function sqlTimestampOf(value: string): string {
+  const d = parseServerDate(value);
+  return Number.isNaN(d.getTime()) ? value : toSqlTimestamp(d);
+}
+
+/**
+ * [start, end) UTC bounds covering the shop-local calendar days `from`..`to`
+ * (YYYY-MM-DD, inclusive). Filtering `created_at >= start AND created_at < end`
+ * uses the created_at index; wrapping the column in date(...) would scan every row.
+ */
+export function shopDayRangeSql(from: string, to: string): [string, string] {
+  const [fy, fm, fd] = from.split('-').map(Number);
+  const [ty, tm, td] = to.split('-').map(Number);
+  return [
+    toSqlTimestamp(shopMidnightUtc({ year: fy, month: fm, day: fd })),
+    toSqlTimestamp(shopMidnightUtc({ year: ty, month: tm, day: td + 1 })),
+  ];
+}
+
+/**
  * "Today" in the shop's own timezone, regardless of where this code actually runs —
  * Vercel's serverless functions run in UTC no matter where the shop is, so plain
  * `new Date()` local getters give the wrong calendar day there. Used for anything

@@ -2,7 +2,8 @@
 
 import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Plus, Search, Edit2, Trash2, AlertTriangle, X, Upload, Download, Printer, Barcode as BarcodeIcon } from 'lucide-react';
+import Link from 'next/link';
+import { Plus, Search, Edit2, Trash2, AlertTriangle, X, Upload, Download, Printer, Barcode as BarcodeIcon, SlidersHorizontal, Copy } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { formatCurrency } from '@/lib/utils';
 
@@ -38,6 +39,9 @@ function StockPageClient() {
   const [importError, setImportError] = useState('');
   const [importSummary, setImportSummary] = useState('');
   const [shop, setShop] = useState({ shopName: 'Mart POS' });
+  const [notice, setNotice] = useState('');
+  const [duplicates, setDuplicates] = useState<Item[][] | null>(null);
+  const [merging, setMerging] = useState(false);
 
   const load = async (q = '') => {
     const res = await fetch(`/api/items?q=${encodeURIComponent(q)}`);
@@ -70,7 +74,9 @@ function StockPageClient() {
       category: form.category,
       cost_price: Number(form.costPrice) || 0,
       sale_price: Number(form.salePrice) || 0,
-      quantity: Number(form.quantity) || 0,
+      // Quantity is only sent for new items — existing stock changes go through
+      // Manage Stock so they're recorded (and can't overwrite sales made meanwhile).
+      ...(editItem ? {} : { quantity: Number(form.quantity) || 0 }),
       unit: form.unit,
       unit_type: form.unitType,
       low_stock_threshold: Number(form.lowStockThreshold) || 5,
@@ -88,10 +94,51 @@ function StockPageClient() {
     setLoading(false);
   };
 
-  const del = async (id: number) => {
-    if (!confirm('Delete this item?')) return;
-    await fetch(`/api/items?id=${id}`, { method: 'DELETE' });
+  const del = async (item: Item) => {
+    if (!confirm(`Delete "${item.name}"?`)) return;
+    const res = await fetch(`/api/items?id=${item.id}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(data.error || 'Failed to delete item');
+    } else {
+      setNotice(data.archived
+        ? `"${item.name}" removed from stock. It appears on past bills, so it is kept in old reports.`
+        : `"${item.name}" deleted.`);
+    }
     load(search);
+  };
+
+  const findDuplicates = async () => {
+    const res = await fetch('/api/items?duplicates=1');
+    setDuplicates(res.ok ? await res.json() : []);
+  };
+
+  /** Keeps `keep` and folds every other item in its duplicate group into it. */
+  const mergeGroup = async (keep: Item, group: Item[]) => {
+    const others = group.filter((g) => g.id !== keep.id);
+    const total = group.reduce((s, g) => s + g.quantity, 0);
+    if (!confirm(`Keep "${keep.name}" (ID ${keep.id}) and merge ${others.length} duplicate(s) into it?
+
+Their sales history moves over and stock is added together (total ${total}).`)) return;
+    setMerging(true);
+    try {
+      for (const o of others) {
+        const res = await fetch('/api/items/merge', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceId: o.id, targetId: keep.id }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(data.error || 'Merge failed');
+          break;
+        }
+      }
+      setNotice(`Merged duplicates into "${keep.name}".`);
+      await findDuplicates();
+      load(search);
+    } finally {
+      setMerging(false);
+    }
   };
 
   const displayedItems = items.filter((i) => !showLowStockOnly || i.quantity <= i.low_stock_threshold);
@@ -147,27 +194,51 @@ function StockPageClient() {
       let skipped = 0;
       const errorCounts = new Map<string, number>();
 
+      let stockChanged = 0;
+      const json = { 'Content-Type': 'application/json' };
+      const num = (v: unknown) => (v === undefined ? undefined : Number(v));
+
       for (const row of rows) {
         const name = String(field(row, ['Name']) || '').trim();
         if (!name) { skipped++; continue; }
         const barcodeRaw = field(row, ['Barcode']);
-        const barcode = barcodeRaw ? String(barcodeRaw).trim() : null;
-        const payload = {
+        const barcode = barcodeRaw ? String(barcodeRaw).trim() : undefined;
+        // Only columns actually present in the sheet are applied — a file without a
+        // Quantity or price column must not reset those values to 0 on every item.
+        const sheet = {
           barcode,
           name,
-          category: String(field(row, ['Category']) || 'General'),
-          cost_price: Number(field(row, ['CostPrice', 'Cost Price', 'BuyPrice', 'Buy Price', 'Cost']) ?? 0),
-          sale_price: Number(field(row, ['SalePrice', 'Sale Price', 'SellPrice', 'Sell Price', 'Price']) ?? 0),
-          quantity: Number(field(row, ['Quantity', 'Stock', 'Qty']) ?? 0),
-          unit: String(field(row, ['Unit']) || 'Pcs'),
-          unit_type: field(row, ['UnitType', 'Unit Type']) === 'WEIGHT' ? 'WEIGHT' : 'COUNT',
-          low_stock_threshold: Number(field(row, ['LowStockThreshold', 'Low Stock Threshold', 'Low Stock Alert']) ?? 5),
+          category: field(row, ['Category']) as string | undefined,
+          cost_price: num(field(row, ['CostPrice', 'Cost Price', 'BuyPrice', 'Buy Price', 'Cost'])),
+          sale_price: num(field(row, ['SalePrice', 'Sale Price', 'SellPrice', 'Sell Price', 'Price'])),
+          unit: field(row, ['Unit']) as string | undefined,
+          unit_type: field(row, ['UnitType', 'Unit Type']) === undefined ? undefined : field(row, ['UnitType', 'Unit Type']) === 'WEIGHT' ? 'WEIGHT' : 'COUNT',
+          low_stock_threshold: num(field(row, ['LowStockThreshold', 'Low Stock Threshold', 'Low Stock Alert'])),
         };
+        const sheetQty = num(field(row, ['Quantity', 'Stock', 'Qty']));
 
         const existing = (barcode && existingByBarcode.get(barcode.toLowerCase())) || existingByName.get(name.toLowerCase());
-        const res = existing
-          ? await fetch('/api/items', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: existing.id, ...payload }) })
-          : await fetch('/api/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        let res: Response;
+        if (existing) {
+          res = await fetch('/api/items', { method: 'PUT', headers: json, body: JSON.stringify({ id: existing.id, ...sheet, _import: true }) });
+          // A different quantity in the sheet is applied as a recorded stock count.
+          if (res.ok && sheetQty !== undefined && Number.isFinite(sheetQty) && sheetQty !== existing.quantity) {
+            const adj = await fetch('/api/items/adjust', {
+              method: 'POST', headers: json,
+              body: JSON.stringify({ id: existing.id, mode: 'SET', quantity: sheetQty, reason: 'Excel import', notes: file.name, _import: true }),
+            });
+            if (adj.ok) { res = adj; stockChanged++; }
+          }
+        } else {
+          res = await fetch('/api/items', {
+            method: 'POST', headers: json,
+            body: JSON.stringify({
+              ...sheet, category: sheet.category || 'General', cost_price: sheet.cost_price ?? 0, sale_price: sheet.sale_price ?? 0,
+              quantity: sheetQty ?? 0, unit: sheet.unit || 'Pcs', unit_type: sheet.unit_type || 'COUNT',
+              low_stock_threshold: sheet.low_stock_threshold ?? 5, _import: true,
+            }),
+          });
+        }
 
         if (res.ok) {
           const saved: Item = await res.json();
@@ -182,7 +253,7 @@ function StockPageClient() {
         }
       }
 
-      const parts = [`${created} added`, `${updated} updated`];
+      const parts = [`${created} added`, `${updated} updated`, `${stockChanged} stock count(s) changed`];
       if (skipped) parts.push(`${skipped} skipped`);
       setImportSummary(`Imported ${rows.length} row(s): ${parts.join(', ')}.`);
       if (errorCounts.size) {
@@ -230,12 +301,18 @@ function StockPageClient() {
         </table>
       </div>
 
-      <div className="no-print flex items-center justify-between mb-6">
+      <div className="no-print flex items-center justify-between flex-wrap gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Stock & Inventory</h1>
           <p className="text-slate-500 text-sm mt-0.5">{items.length} items total</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Link href="/stock/manage" className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold transition-colors">
+            <SlidersHorizontal size={16} /> Manage Stock
+          </Link>
+          <button onClick={findDuplicates} className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold transition-colors">
+            <Copy size={16} /> Duplicates
+          </button>
           <button onClick={() => window.print()} className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold transition-colors">
             <Printer size={16} /> Print
           </button>
@@ -253,6 +330,37 @@ function StockPageClient() {
       </div>
 
       <div className="no-print">
+        {notice && (
+          <div className="mb-4 flex items-start justify-between gap-3 bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-xl text-sm font-medium">
+            <span>{notice}</span>
+            <button onClick={() => setNotice('')} className="text-blue-400 hover:text-blue-600"><X size={16} /></button>
+          </div>
+        )}
+        {duplicates && (
+          <div className="mb-4 bg-white border border-slate-200 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-bold text-slate-700">Duplicate items</h2>
+              <button onClick={() => setDuplicates(null)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+            </div>
+            {duplicates.length === 0 ? (
+              <p className="text-sm text-slate-500">No duplicates found. Items only count as duplicates when their names match ignoring capitals, spaces and punctuation. To join two items with different names, open one in Manage Stock and use Merge.</p>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-500">Click <b>Keep this</b> on the item you want to keep. The others merge into it: their sales history moves over and their stock is added.</p>
+                {duplicates.map((group) => (
+                  <div key={group[0].id} className="border border-amber-200 bg-amber-50/50 rounded-xl divide-y divide-amber-100">
+                    {group.map((g) => (
+                      <div key={g.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                        <span><span className="font-mono text-slate-400 mr-2">#{g.id}</span><b>{g.name}</b> <span className="text-slate-500">· stock {g.quantity} · {formatCurrency(g.sale_price)}{g.barcode ? ` · ${g.barcode}` : ''}</span></span>
+                        <button disabled={merging} onClick={() => mergeGroup(g, group)} className="text-xs font-bold bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white px-3 py-1.5 rounded-lg">Keep this</button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {importSummary && <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-xl text-sm font-medium">{importSummary}</div>}
         {importError && <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">{importError}</div>}
 
@@ -316,8 +424,9 @@ function StockPageClient() {
                     <td className="px-5 py-3.5 text-sm text-slate-500">{item.unit}{item.unit_type === 'WEIGHT' ? ' (wt)' : ''}</td>
                     <td className="px-5 py-3.5">
                       <div className="flex gap-2 justify-end">
-                        <button onClick={() => openEdit(item)} className="text-slate-400 hover:text-blue-600 transition-colors"><Edit2 size={15} /></button>
-                        <button onClick={() => del(item.id)} className="text-slate-400 hover:text-red-600 transition-colors"><Trash2 size={15} /></button>
+                        <Link href={`/stock/manage?id=${item.id}`} title="Manage stock & history" className="text-slate-400 hover:text-emerald-600 transition-colors"><SlidersHorizontal size={15} /></Link>
+                        <button onClick={() => openEdit(item)} title="Edit details" className="text-slate-400 hover:text-blue-600 transition-colors"><Edit2 size={15} /></button>
+                        <button onClick={() => del(item)} title="Delete" className="text-slate-400 hover:text-red-600 transition-colors"><Trash2 size={15} /></button>
                       </div>
                     </td>
                   </tr>
@@ -377,11 +486,20 @@ function StockPageClient() {
                   <input type="number" value={form.salePrice} onChange={(e) => setForm({ ...form, salePrice: e.target.value })} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">Quantity {form.unitType === 'WEIGHT' ? '(supports decimals, e.g. 2.5)' : ''}</label>
-                <input type="number" step={form.unitType === 'WEIGHT' ? '0.01' : '1'} value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                {editItem && <p className="text-xs text-slate-400 mt-1">Tip: use Purchases to add stock so cost/expiry batches stay accurate.</p>}
-              </div>
+              {editItem ? (
+                <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500">Current stock</p>
+                    <p className="text-lg font-black text-slate-800">{editItem.quantity} {editItem.unit}</p>
+                  </div>
+                  <Link href={`/stock/manage?id=${editItem.id}`} className="text-sm font-semibold text-emerald-600 hover:text-emerald-700">Add / correct stock →</Link>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Opening Quantity {form.unitType === 'WEIGHT' ? '(supports decimals, e.g. 2.5)' : ''}</label>
+                  <input type="number" step={form.unitType === 'WEIGHT' ? '0.01' : '1'} value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              )}
             </div>
             <div className="flex gap-3 p-6 pt-0">
               <button onClick={() => setShowModal(false)} className="flex-1 border border-slate-200 text-slate-600 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-colors">Cancel</button>

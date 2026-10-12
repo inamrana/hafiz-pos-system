@@ -21,6 +21,7 @@ export async function POST(req: NextRequest) {
       supplierId: body.supplierId || null,
       supplierName: body.supplierName || 'Unknown Supplier',
       paymentType: body.paymentType === 'CREDIT' ? 'CREDIT' : 'CASH',
+      notes: body.notes || '',
       items: body.items,
     });
     return NextResponse.json(purchase, { status: 201 });

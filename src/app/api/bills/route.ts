@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   return withAuth(req, async () => {
     const body = await req.json();
-    const { items, discount, paymentType, customerId, customerName } = body;
+    const { items, discount, paymentType, customerId, customerName, clientRef } = body;
 
     if (!items || items.length === 0) {
       return NextResponse.json({ error: 'Bill must contain at least one item' }, { status: 400 });
@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
       paymentType,
       customerId: customerId || null,
       customerName: customerName || 'Walk-in Customer',
+      clientRef: typeof clientRef === 'string' ? clientRef : null,
     });
 
     return NextResponse.json(bill, { status: 201 });
